@@ -146,6 +146,28 @@ describe("booking seats", () => {
     expect(JSON.stringify(map.body)).not.toMatch(/Ramesh|9876543210/);
   });
 
+  it("lists an agent's own bookings with the passenger, and none of another agent's", async () => {
+    const a = await addAgent(ids.operatorId, "anil@example.com");
+    const b = await addAgent(ids.operatorId, "babu@example.com");
+    const { trip, seats } = await tripIn(ids.operatorId, 30);
+    await as("AGENT", a.id, ids.operatorId).post("/api/v1/booking/bookings").send(order(trip.id, [person(seats[0]!.id)])).expect(201);
+
+    const mine = await as("AGENT", a.id, ids.operatorId).get("/api/v1/booking/bookings").expect(200);
+    expect(mine.body.total).toBe(1);
+    expect(mine.body.items[0]).toMatchObject({
+      status: "CONFIRMED",
+      source: "AGENT",
+      fare: "1200",
+      seatNumber: "L1",
+      boardingPoint: "Ameerpet",
+      passenger: { name: "Ramesh Kumar", age: 34, gender: "MALE", phone: "9876543210" },
+      trip: { route: { origin: "Hyderabad", destination: "Bengaluru" }, bus: { name: "Volvo" } },
+    });
+    expect(JSON.stringify(mine.body)).not.toMatch(/phoneEnc|idProof/);
+
+    expect((await as("AGENT", b.id, ids.operatorId).get("/api/v1/booking/bookings").expect(200)).body.total).toBe(0);
+  });
+
   it("refuses a seat that is already booked and leaves nothing half-done", async () => {
     const agent = await addAgent(ids.operatorId, "anil@example.com");
     const { trip, seats } = await tripIn(ids.operatorId, 30);

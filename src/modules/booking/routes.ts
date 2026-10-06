@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { idParam } from "../../core/accounts";
+import { decrypt } from "../../core/crypto";
 import { prisma } from "../../core/db";
 import { AppError } from "../../core/errors";
 import { bookingInput, createBooking } from "./service";
@@ -102,6 +103,50 @@ bookingRouter.get("/trips/:id/seats", async (req, res) => {
     trip,
     seats: seats.map(({ bookings, ...s }) => ({ ...s, passengerGender: bookings[0]?.passenger?.gender ?? null })),
   });
+});
+
+// The agent's own bookings, newest first. Agents never see another agent's bookings.
+// ponytail: latest 200 in one page; add paging and server-side filters when an agent outgrows that.
+bookingRouter.get("/bookings", async (req, res) => {
+  const rows = await prisma.booking.findMany({
+    where: { operatorId: req.operatorId, agentId: req.auth.userId },
+    select: {
+      id: true,
+      pnr: true,
+      status: true,
+      source: true,
+      fare: true,
+      paymentMode: true,
+      boardingPoint: true,
+      droppingPoint: true,
+      createdAt: true,
+      tripSeat: { select: { seatNumber: true } },
+      trip: {
+        select: {
+          departureAt: true,
+          arrivalAt: true,
+          route: { select: { origin: true, destination: true } },
+          bus: { select: { registrationNo: true, name: true } },
+        },
+      },
+      passenger: { select: { name: true, age: true, gender: true, phoneEnc: true } },
+    },
+    orderBy: { createdAt: "desc" },
+    take: 200,
+  });
+
+  const items = rows.map(({ tripSeat, passenger, ...b }) => ({
+    ...b,
+    seatNumber: tripSeat.seatNumber,
+    // The agent typed this number in, so they may see it again.
+    passenger: passenger && {
+      name: passenger.name,
+      age: passenger.age,
+      gender: passenger.gender,
+      phone: decrypt(passenger.phoneEnc),
+    },
+  }));
+  res.json({ items, total: items.length });
 });
 
 bookingRouter.post("/bookings", async (req, res) => {
