@@ -64,6 +64,7 @@ describe("reports summary", () => {
 
     expect(res.body.daily).toHaveLength(7);
     expect(res.body.daily.at(-1)).toMatchObject({ bookings: 2, revenue: 1000, cancelled: 1 });
+    expect(Math.max(...res.body.daily.map((d: { occupancyPct: number }) => d.occupancyPct))).toBe(4.4);
     const source = Object.fromEntries(res.body.bySource.map((s: { source: string; bookings: number }) => [s.source, s.bookings]));
     expect(source).toEqual({ redBus: 0, AbhiBus: 0, Website: 0, Agent: 1, Counter: 1 });
     expect(res.body.byRoute).toEqual([

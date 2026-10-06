@@ -61,7 +61,6 @@ reportsRouter.get("/summary", async (req, res) => {
         source: true,
         fare: true,
         createdAt: true,
-        tripId: true,
         channel: { select: { type: true } },
         agent: { select: { id: true, name: true, agentCode: true } },
         commission: { select: { amount: true, status: true } },
@@ -76,10 +75,10 @@ reportsRouter.get("/summary", async (req, res) => {
     prisma.trip.findMany({
       where: { operatorId, departureAt: { gte: start, lt: end }, status: { notIn: ["CANCELLED", "MAINTENANCE"] } },
       select: {
-        id: true,
+        departureAt: true,
         route: { select: { origin: true, destination: true } },
         bus: { select: { registrationNo: true } },
-        _count: { select: { seats: true } },
+        _count: { select: { seats: true, bookings: { where: { status: { notIn: ["CANCELLED", "REFUNDED"] } } } } },
       },
     }),
     prisma.bus.count({ where: { operatorId, status: "ACTIVE" } }),
@@ -122,8 +121,10 @@ reportsRouter.get("/summary", async (req, res) => {
   const revenue = standing.reduce((sum, b) => sum + Number(b.fare), 0);
 
   // --- per day, including days with no sales
-  const perDay = new Map<string, Tally & { cancelled: number }>();
-  for (let i = 0; i < days; i++) perDay.set(istDay(new Date(start.getTime() + i * DAY_MS)), { bookings: 0, revenue: 0, cancelled: 0 });
+  const perDay = new Map<string, Tally & { cancelled: number; seats: number; seatsSold: number }>();
+  for (let i = 0; i < days; i++) {
+    perDay.set(istDay(new Date(start.getTime() + i * DAY_MS)), { bookings: 0, revenue: 0, cancelled: 0, seats: 0, seatsSold: 0 });
+  }
   for (const b of sold) {
     const t = perDay.get(istDay(b.createdAt));
     if (!t) continue;
@@ -138,12 +139,10 @@ reportsRouter.get("/summary", async (req, res) => {
   const byRoute = new Map<string, Tally>();
   const byBus = new Map<string, Tally & { name: string }>();
   const byAgent = new Map<string, Tally & { name: string; code: string; commission: number }>();
-  const soldOnTrip = new Map<string, number>();
   for (const b of standing) {
     const fare = Number(b.fare);
     add(bySource, sourceName(b.channel.type, b.source), fare);
     add(byRoute, `${b.trip.route.origin} → ${b.trip.route.destination}`, fare);
-    soldOnTrip.set(b.tripId, (soldOnTrip.get(b.tripId) ?? 0) + 1);
 
     const bus = byBus.get(b.trip.bus.registrationNo) ?? { bookings: 0, revenue: 0, name: b.trip.bus.name ?? "" };
     bus.bookings += 1;
@@ -159,7 +158,8 @@ reportsRouter.get("/summary", async (req, res) => {
     }
   }
 
-  // Seats offered, per route and per bus, on trips departing in the range.
+  // Occupancy is about the buses that ran: seats filled on trips departing in the range,
+  // whenever those tickets were sold.
   const offered = new Map<string, { trips: number; seats: number; sold: number }>();
   const offeredByBus = new Map<string, { trips: number; seats: number; sold: number }>();
   const offer = (map: typeof offered, key: string, seats: number, soldSeats: number) => {
@@ -170,7 +170,12 @@ reportsRouter.get("/summary", async (req, res) => {
     map.set(key, o);
   };
   for (const t of trips) {
-    const soldSeats = soldOnTrip.get(t.id) ?? 0;
+    const soldSeats = t._count.bookings;
+    const d = perDay.get(istDay(t.departureAt));
+    if (d) {
+      d.seats += t._count.seats;
+      d.seatsSold += soldSeats;
+    }
     offer(offered, `${t.route.origin} → ${t.route.destination}`, t._count.seats, soldSeats);
     offer(offeredByBus, t.bus.registrationNo, t._count.seats, soldSeats);
   }
@@ -179,7 +184,7 @@ reportsRouter.get("/summary", async (req, res) => {
 
   const seatsAhead = upcoming.reduce((sum, t) => sum + t._count.seats, 0);
   const seatsInRange = trips.reduce((sum, t) => sum + t._count.seats, 0);
-  const soldInRange = trips.reduce((sum, t) => sum + (soldOnTrip.get(t.id) ?? 0), 0);
+  const soldInRange = trips.reduce((sum, t) => sum + t._count.bookings, 0);
 
   res.json({
     range: { from, to, days },
@@ -202,7 +207,7 @@ reportsRouter.get("/summary", async (req, res) => {
       seatsSold: seatsSoldAhead,
       occupancyPct: pct(seatsSoldAhead, seatsAhead),
     },
-    daily: [...perDay].map(([date, t]) => ({ date, ...t })),
+    daily: [...perDay].map(([date, { seats, seatsSold, ...t }]) => ({ date, ...t, occupancyPct: pct(seatsSold, seats) })),
     bySource: [...bySource].map(([source, t]) => ({ source, ...t })),
     byRoute: [...byRoute]
       .map(([route, t]) => {
