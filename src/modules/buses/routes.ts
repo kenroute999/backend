@@ -3,6 +3,7 @@ import { z } from "zod";
 import { idParam, isInUseError, isPrismaError } from "../../core/accounts";
 import { prisma } from "../../core/db";
 import { AppError } from "../../core/errors";
+import { layoutFor } from "./layouts";
 
 const busInput = z.strictObject({
   registrationNo: z
@@ -13,8 +14,8 @@ const busInput = z.strictObject({
   name: z.string().trim().min(1).max(60),
   seating: z.enum(["SLEEPER", "SEATER", "SEATER_SLEEPER"]),
   isAc: z.boolean(),
-  /** Used to pick the bus's seat layout. */
-  seats: z.number().int().min(1).max(80),
+  /** Accepted for older clients but not stored: the seat count follows from the layout of the bus. */
+  seats: z.number().int().min(1).max(80).optional(),
   status: z.enum(["ACTIVE", "MAINTENANCE", "INACTIVE"]).default("ACTIVE"),
 });
 
@@ -32,29 +33,6 @@ type Row = {
   seatLayout: { id: string; name: string; totalSeats: number };
 } & Record<string, unknown>;
 const present = ({ seatLayout, ...bus }: Row) => ({ ...bus, seats: seatLayout.totalSeats, seatLayout });
-
-/** Placeholder grid, four across on one deck, until the bus is given a designed layout. */
-function gridSeats(count: number, type: string) {
-  return Array.from({ length: count }, (_, i) => ({
-    number: String(i + 1),
-    deck: "LOWER",
-    row: Math.floor(i / 4),
-    col: i % 4,
-    type,
-    ladiesOnly: false,
-  }));
-}
-
-/** Buses of the same kind and size share one layout. */
-export async function layoutFor(operatorId: string, seating: string, seats: number) {
-  const name = `${seating} ${seats}`;
-  return (
-    (await prisma.seatLayout.findFirst({ where: { operatorId, name } })) ??
-    (await prisma.seatLayout.create({
-      data: { operatorId, name, totalSeats: seats, seats: gridSeats(seats, seating === "SEATER" ? "SEATER" : "SLEEPER") },
-    }))
-  );
-}
 
 const hasUpcomingTrips = (busId: string) =>
   prisma.trip.findFirst({
@@ -76,9 +54,9 @@ busesRouter.get("/", async (req, res) => {
 });
 
 busesRouter.post("/", async (req, res) => {
-  const { seats, ...body } = busInput.parse(req.body);
+  const { seats: _seats, ...body } = busInput.parse(req.body);
   const operatorId = req.operatorId;
-  const layout = await layoutFor(operatorId, body.seating, seats);
+  const layout = await layoutFor(operatorId, body.seating);
   try {
     const bus = await prisma.bus.create({ data: { ...body, operatorId, seatLayoutId: layout.id }, select: busFields });
     res.status(201).json(present(bus));
@@ -90,15 +68,14 @@ busesRouter.post("/", async (req, res) => {
 
 busesRouter.patch("/:id", async (req, res) => {
   const { id } = idParam.parse(req.params);
-  const { seats, ...body } = busInput.partial().parse(req.body);
+  const { seats: _seats, ...body } = busInput.partial().parse(req.body);
   const operatorId = req.operatorId;
 
   const existing = await prisma.bus.findFirst({ where: { id, operatorId }, select: busFields });
   if (!existing) throw new AppError(404, "NOT_FOUND", "Bus not found");
 
   const seating = body.seating ?? existing.seating;
-  const seatCount = seats ?? existing.seatLayout.totalSeats;
-  const layoutChanges = seating !== existing.seating || seatCount !== existing.seatLayout.totalSeats;
+  const layoutChanges = seating !== existing.seating;
   const goesOffRoad = body.status !== undefined && body.status !== "ACTIVE" && existing.status === "ACTIVE";
   // Seats already on sale were generated from the old layout, and passengers may hold them.
   if ((layoutChanges || goesOffRoad) && (await hasUpcomingTrips(id))) {
@@ -113,7 +90,7 @@ busesRouter.patch("/:id", async (req, res) => {
         ...(body.name !== undefined && { name: body.name }),
         ...(body.isAc !== undefined && { isAc: body.isAc }),
         ...(body.status !== undefined && { status: body.status }),
-        ...(layoutChanges && { seating, seatLayoutId: (await layoutFor(operatorId, seating, seatCount)).id }),
+        ...(layoutChanges && { seating, seatLayoutId: (await layoutFor(operatorId, seating)).id }),
       },
       select: busFields,
     });

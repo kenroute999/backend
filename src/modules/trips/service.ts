@@ -113,3 +113,42 @@ export async function createTripWithSeats(operatorId: string, input: NewTrip) {
     return trip;
   });
 }
+
+/**
+ * Brings upcoming trips in line with the current layout of their bus. Only trips on
+ * which nothing has ever been booked are touched: their seats are replaced and
+ * priced again. A trip with bookings keeps the seats its passengers hold.
+ */
+export async function rebuildUnsoldTripSeats(operatorId: string): Promise<number> {
+  const trips = await prisma.trip.findMany({
+    where: { operatorId, departureAt: { gt: new Date() }, bookings: { none: {} } },
+    include: { bus: { include: { seatLayout: true } }, seats: { select: { seatNumber: true } } },
+  });
+  let rebuilt = 0;
+  for (const trip of trips) {
+    const layout = layoutSeats.parse(trip.bus.seatLayout.seats);
+    const current = trip.seats.map((s) => s.seatNumber).sort().join(",");
+    const wanted = layout.map((s) => s.number).sort().join(",");
+    if (current === wanted) continue;
+
+    const fares = (trip.fares ?? {}) as Fares;
+    const fallback = Number(trip.fare);
+    await prisma.$transaction([
+      prisma.tripSeat.deleteMany({ where: { tripId: trip.id } }),
+      prisma.tripSeat.createMany({
+        data: layout.map((s) => ({
+          operatorId,
+          tripId: trip.id,
+          seatNumber: s.number,
+          deck: s.deck,
+          row: s.row,
+          col: s.col,
+          seatType: s.type,
+          fare: fareFor(s.type, fares, fallback),
+        })),
+      }),
+    ]);
+    rebuilt++;
+  }
+  return rebuilt;
+}

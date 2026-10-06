@@ -1,6 +1,7 @@
 import bcrypt from "bcrypt";
 import { prisma } from "../src/core/db";
-import { createTripWithSeats } from "../src/modules/trips/service";
+import { layoutFor } from "../src/modules/buses/layouts";
+import { createTripWithSeats, rebuildUnsoldTripSeats } from "../src/modules/trips/service";
 
 // Safe to run repeatedly: existing rows are left alone.
 const OPERATOR = "Sri Krishna Travels";
@@ -61,18 +62,6 @@ function istDay(offset: number) {
   return new Date(Date.now() + offset * 86_400_000).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 }
 
-// Placeholder grid, four across on one deck. Real layouts come from the seat-layout designer.
-function gridSeats(count: number, type: string) {
-  return Array.from({ length: count }, (_, i) => ({
-    number: String(i + 1),
-    deck: "LOWER",
-    row: Math.floor(i / 4),
-    col: i % 4,
-    type,
-    ladiesOnly: false,
-  }));
-}
-
 async function main() {
   const operator =
     (await prisma.operator.findFirst({ where: { name: OPERATOR } })) ??
@@ -99,15 +88,14 @@ async function main() {
     if (await prisma.driver.findFirst({ where: { operatorId, licenseNo: d.licenseNo } })) continue;
     await prisma.driver.create({ data: { ...d, operatorId } });
   }
-  for (const { seats, ...b } of buses) {
-    if (await prisma.bus.findFirst({ where: { operatorId, registrationNo: b.registrationNo } })) continue;
-    const name = `${b.seating} ${seats}`;
-    const layout =
-      (await prisma.seatLayout.findFirst({ where: { operatorId, name } })) ??
-      (await prisma.seatLayout.create({
-        data: { operatorId, name, totalSeats: seats, seats: gridSeats(seats, b.seating === "SEATER" ? "SEATER" : "SLEEPER") },
-      }));
-    await prisma.bus.create({ data: { ...b, operatorId, seatLayoutId: layout.id } });
+  for (const { seats: _seats, ...b } of buses) {
+    // Every bus sits on the layout drawn for its kind in Admin, including buses seeded earlier.
+    const layout = await layoutFor(operatorId, b.seating);
+    const existing = await prisma.bus.findFirst({ where: { operatorId, registrationNo: b.registrationNo } });
+    if (!existing) await prisma.bus.create({ data: { ...b, operatorId, seatLayoutId: layout.id } });
+    else if (existing.seatLayoutId !== layout.id) {
+      await prisma.bus.update({ where: { id: existing.id }, data: { seatLayoutId: layout.id } });
+    }
   }
   for (const r of routes) {
     const existing = await prisma.route.findFirst({ where: { operatorId, origin: r.origin, destination: r.destination } });
@@ -138,6 +126,9 @@ async function main() {
       });
     }
   }
+
+  const rebuilt = await rebuildUnsoldTripSeats(operatorId);
+  if (rebuilt > 0) console.log(`Rebuilt seats on ${rebuilt} unsold trips to match the bus layouts`);
 
   const where = { operatorId };
   const [agentCount, driverCount, busCount, routeCount, tripCount] = await Promise.all([

@@ -1,12 +1,13 @@
 import { prisma } from "../../core/db";
 import { as, cleanDb, seedOwner } from "../../test/helpers";
+import { designedSeats } from "../buses/layouts";
 
 const HOUR = 3_600_000;
 let ids: { operatorId: string; userId: string };
 const owner = () => as("OWNER", ids.userId, ids.operatorId);
 const inHours = (h: number) => new Date(Date.now() + h * HOUR).toISOString();
 
-const bus = { registrationNo: "ts 09 ab 1234", name: "KenRoute Volvo", seating: "SEATER_SLEEPER", isAc: true, seats: 8 };
+const bus = { registrationNo: "ts 09 ab 1234", name: "KenRoute Volvo", seating: "SEATER_SLEEPER", isAc: true };
 
 /** A bus whose layout has both seaters and sleepers, so fares by kind can be told apart. */
 async function mixedBus() {
@@ -45,15 +46,50 @@ beforeEach(async () => {
 
 afterAll(() => prisma.$disconnect());
 
+describe("seat layouts", () => {
+  it("match the plans drawn in Admin: counts, decks, aisle and bed kinds", () => {
+    const sleeper = designedSeats("SLEEPER");
+    expect(sleeper).toHaveLength(36);
+    expect(sleeper.filter((s) => s.deck === "UPPER")).toHaveLength(18);
+    expect(sleeper.some((s) => s.col === 1)).toBe(false); // the aisle stays empty
+    expect(sleeper.filter((s) => s.type === "DOUBLE_SLEEPER")).toHaveLength(24);
+    expect(new Set(sleeper.map((s) => s.number)).size).toBe(36);
+
+    const seater = designedSeats("SEATER");
+    expect(seater).toHaveLength(45);
+    expect(seater.every((s) => s.deck === "LOWER" && s.type === "SEATER")).toBe(true);
+    expect(seater.filter((s) => s.row === 10)).toHaveLength(5); // back bench
+
+    const mixed = designedSeats("SEATER_SLEEPER");
+    expect(mixed).toHaveLength(48);
+    expect(mixed.filter((s) => s.deck === "LOWER" && s.type === "SEATER")).toHaveLength(24);
+    expect(mixed.filter((s) => s.deck === "LOWER" && s.type === "SLEEPER")).toHaveLength(6);
+  });
+
+  it("a new bus gets the layout of its kind and its trips are priced by seat kind", async () => {
+    const made = await owner().post("/api/v1/buses").send({ ...bus, seating: "SLEEPER" }).expect(201);
+    expect(made.body).toMatchObject({ seats: 36, seatLayout: { name: "Sleeper (2+1)" } });
+    const trip = await owner()
+      .post("/api/v1/schedules")
+      .send(schedule(made.body.id, { fares: { singleBed: 1400, doubleBed: 950 } }))
+      .expect(201);
+    const byType = await prisma.tripSeat.groupBy({ by: ["seatType", "fare"], where: { tripId: trip.body.id }, _count: true });
+    expect(byType.map((g) => [g.seatType, g.fare.toFixed(0), g._count]).sort()).toEqual([
+      ["DOUBLE_SLEEPER", "950", 24],
+      ["SLEEPER", "1400", 12],
+    ]);
+  });
+});
+
 describe("buses", () => {
   it("creates, lists, updates and deletes a bus; blocks a duplicate number", async () => {
     const made = await owner().post("/api/v1/buses").send(bus).expect(201);
-    expect(made.body).toMatchObject({ registrationNo: "TS 09 AB 1234", seating: "SEATER_SLEEPER", isAc: true, seats: 8, status: "ACTIVE" });
+    expect(made.body).toMatchObject({ registrationNo: "TS 09 AB 1234", seating: "SEATER_SLEEPER", isAc: true, seats: 48, status: "ACTIVE" });
     await owner().post("/api/v1/buses").send(bus).expect(409);
     await owner().post("/api/v1/buses").send({ ...bus, registrationNo: "x" }).expect(400);
 
-    const changed = await owner().patch(`/api/v1/buses/${made.body.id}`).send({ name: "Renamed", seats: 12, status: "MAINTENANCE" }).expect(200);
-    expect(changed.body).toMatchObject({ name: "Renamed", seats: 12, status: "MAINTENANCE" });
+    const changed = await owner().patch(`/api/v1/buses/${made.body.id}`).send({ name: "Renamed", seating: "SEATER", status: "MAINTENANCE" }).expect(200);
+    expect(changed.body).toMatchObject({ name: "Renamed", seating: "SEATER", seats: 45, status: "MAINTENANCE" });
     expect((await owner().get("/api/v1/buses").expect(200)).body.total).toBe(1);
 
     await owner().delete(`/api/v1/buses/${made.body.id}`).expect(204);
