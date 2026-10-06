@@ -228,3 +228,55 @@ schedulesRouter.delete("/:id", async (req, res) => {
   await prisma.trip.delete({ where: { id } });
   res.status(204).end();
 });
+
+// ---------------------------------------------------------------- seats of one trip (the Seat Layouts screen)
+
+schedulesRouter.get("/:id/seats", async (req, res) => {
+  const { id } = idParam.parse(req.params);
+  const trip = await prisma.trip.findFirst({ where: { id, operatorId: req.operatorId }, select: { id: true } });
+  if (!trip) throw new AppError(404, "NOT_FOUND", "Trip not found");
+
+  const seats = await prisma.tripSeat.findMany({
+    where: { tripId: id },
+    select: {
+      id: true,
+      seatNumber: true,
+      deck: true,
+      row: true,
+      col: true,
+      seatType: true,
+      fare: true,
+      status: true,
+      // The ticket that holds the seat now, if any.
+      bookings: {
+        where: { status: { in: ["CONFIRMED", "BOARDED", "COMPLETED"] } },
+        select: {
+          id: true,
+          pnr: true,
+          createdAt: true,
+          boardingPoint: true,
+          droppingPoint: true,
+          agent: { select: { name: true } },
+          passenger: { select: { name: true, gender: true } },
+        },
+        take: 1,
+      },
+    },
+    orderBy: [{ deck: "asc" }, { row: "asc" }, { col: "asc" }],
+  });
+  res.json({ seats: seats.map(({ bookings, ...s }) => ({ ...s, booking: bookings[0] ?? null })) });
+});
+
+// The owner keeps a seat off sale (blocked) or puts it back. A sold seat is not touched here.
+schedulesRouter.patch("/:id/seats/:seatId", async (req, res) => {
+  const { id, seatId } = z.object({ id: z.uuid(), seatId: z.uuid() }).parse(req.params);
+  const { blocked } = z.strictObject({ blocked: z.boolean() }).parse(req.body);
+  const changed = await prisma.tripSeat.updateMany({
+    where: { id: seatId, tripId: id, operatorId: req.operatorId, status: blocked ? "AVAILABLE" : "BLOCKED" },
+    data: { status: blocked ? "BLOCKED" : "AVAILABLE" },
+  });
+  if (changed.count === 0) {
+    throw new AppError(409, "CONFLICT", blocked ? "Only a free seat can be blocked" : "This seat is not blocked");
+  }
+  res.json({ id: seatId, status: blocked ? "BLOCKED" : "AVAILABLE" });
+});

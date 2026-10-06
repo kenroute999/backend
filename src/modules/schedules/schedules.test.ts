@@ -187,6 +187,53 @@ describe("schedules", () => {
     await owner().patch(url).send({ departureAt: inHours(25), arrivalAt: inHours(34) }).expect(200);
   });
 
+  it("shows the owner each seat with its ticket, and lets a free seat be blocked and released", async () => {
+    const busId = await mixedBus();
+    const made = await owner().post("/api/v1/schedules").send(schedule(busId)).expect(201);
+    const url = `/api/v1/schedules/${made.body.id}/seats`;
+    const agent = await prisma.agent.create({
+      data: { operatorId: ids.operatorId, name: "Anil", phone: "9988776655", email: "anil@example.com", passwordHash: "x", agentCode: "AGT1", commissionPct: 10 },
+    });
+    const desk = as("AGENT", agent.id, ids.operatorId);
+    const before = (await owner().get(url).expect(200)).body.seats;
+    expect(before).toHaveLength(4);
+    const [sold, free] = before;
+    await desk
+      .post("/api/v1/booking/bookings")
+      .send({
+        tripId: made.body.id,
+        source: "AGENT",
+        boardingPoint: "Ameerpet",
+        droppingPoint: "Majestic",
+        paymentMode: "CASH",
+        passengers: [{ seatId: sold.id, name: "Lakshmi Devi", age: 30, gender: "FEMALE", phone: "9876543210", idProofType: "AADHAAR", idProofNumber: "123456789012" }],
+      })
+      .expect(201);
+
+    await owner().patch(`${url}/${free.id}`).send({ blocked: true }).expect(200);
+    await owner().patch(`${url}/${free.id}`).send({ blocked: true }).expect(409);
+    await owner().patch(`${url}/${sold.id}`).send({ blocked: true }).expect(409); // sold seats stay sold
+
+    const after = (await owner().get(url).expect(200)).body.seats;
+    expect(after.find((s: { id: string }) => s.id === sold.id)).toMatchObject({
+      status: "BOOKED",
+      booking: { boardingPoint: "Ameerpet", agent: { name: "Anil" }, passenger: { name: "Lakshmi Devi", gender: "FEMALE" } },
+    });
+    expect(after.find((s: { id: string }) => s.id === free.id)).toMatchObject({ status: "BLOCKED", booking: null });
+    expect(JSON.stringify(after)).not.toMatch(/9876543210/);
+    // A blocked seat cannot be sold.
+    await desk
+      .post("/api/v1/booking/bookings")
+      .send({ tripId: made.body.id, source: "AGENT", boardingPoint: "Ameerpet", droppingPoint: "Majestic", paymentMode: "CASH", passengers: [{ seatId: free.id, name: "Ramesh Kumar", age: 30, gender: "MALE", phone: "9876543210", idProofType: "AADHAAR", idProofNumber: "123456789012" }] })
+      .expect(409);
+    await owner().patch(`${url}/${free.id}`).send({ blocked: false }).expect(200);
+
+    const other = await seedOwner("Other Travels", "owner@other.example.com");
+    const them = as("OWNER", other.userId, other.operatorId);
+    await them.get(url).expect(404);
+    await them.patch(`${url}/${free.id}`).send({ blocked: true }).expect(409);
+  });
+
   it("deletes an unsold trip, and never touches another operator's", async () => {
     const busId = await mixedBus();
     const made = await owner().post("/api/v1/schedules").send(schedule(busId)).expect(201);
