@@ -21,6 +21,17 @@ export function isPrismaError(err: unknown, code: string): boolean {
 }
 
 /**
+ * True when a delete was refused because other rows still point at the record.
+ * PostgreSQL 18 reports this as a restrict violation (23001), which Prisma does not
+ * map to its usual P2003, so both forms are recognised.
+ */
+export function isInUseError(err: unknown): boolean {
+  if (isPrismaError(err, "P2003")) return true;
+  const text = err instanceof Error ? err.message : "";
+  return /RestrictViolation|ForeignKeyViolation|"originalCode":"2300[13]"|23503/.test(text);
+}
+
+/**
  * Login emails live in two tables (User for owners, Agent) and must not
  * repeat across them, or sign-in could not tell which account is meant.
  * Conductors sign in with their mobile number instead.

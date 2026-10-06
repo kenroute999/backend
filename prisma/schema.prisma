@@ -57,6 +57,8 @@ enum TripStatus {
   IN_PROGRESS
   COMPLETED
   CANCELLED
+  /// The bus is off the road; the trip is not on sale.
+  MAINTENANCE
 }
 
 enum Deck {
@@ -370,6 +372,8 @@ model Trip {
   arrivalAt   DateTime
   /// Copied from Route.baseFare at creation; owner may override per trip.
   fare        Decimal    @db.Decimal(10, 2)
+  /// Fare per kind of seat: { seater, singleBed, doubleBed }. `fare` is the lowest of them.
+  fares       Json?
   status      TripStatus @default(SCHEDULED)
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
@@ -397,6 +401,8 @@ model TripSeat {
   row        Int
   col        Int
   seatType   String     @default("SLEEPER")
+  /// What this seat costs on this trip.
+  fare       Decimal    @db.Decimal(10, 2)
   status     SeatStatus @default(AVAILABLE)
   heldUntil  DateTime?
   heldById   String?    @db.Uuid

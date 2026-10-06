@@ -88,6 +88,7 @@ bookingRouter.get("/trips/:id/seats", async (req, res) => {
       row: true,
       col: true,
       seatType: true,
+      fare: true,
       status: true,
       // Only the gender of the current occupant, for the seat colour. No names or phones.
       bookings: {

@@ -11,6 +11,7 @@ import { conductorAppRouter } from "./modules/conductor-app/routes";
 import { conductorsRouter } from "./modules/conductors/routes";
 import { driversRouter } from "./modules/drivers/routes";
 import { routesRouter } from "./modules/routes/routes";
+import { schedulesRouter } from "./modules/schedules/routes";
 import { tripsRouter } from "./modules/trips/routes";
 
 export const app = express();
@@ -33,6 +34,7 @@ api.use("/conductors", owner, conductorsRouter);
 api.use("/buses", owner, busesRouter);
 api.use("/routes", owner, routesRouter);
 api.use("/trips", owner, tripsRouter);
+api.use("/schedules", owner, schedulesRouter);
 
 // The agent's booking desk.
 api.use("/booking", requireAuth, requireRole("AGENT"), bookingRouter);

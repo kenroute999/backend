@@ -71,7 +71,6 @@ export async function createBooking(ctx: { operatorId: string; agentId: string }
 
   const seatIds = input.passengers.map((p) => p.seatId);
   const pnr = newPnr();
-  const commissionEach = trip.fare.mul(agent.commissionPct).div(100).toDecimalPlaces(2);
 
   const bookings = await prisma.$transaction(async (tx) => {
     // Claim the seats in one conditional update: if anyone else got there first, the
@@ -89,8 +88,18 @@ export async function createBooking(ctx: { operatorId: string; agentId: string }
       (await tx.channel.findFirst({ where: { operatorId, type: "OWN_AGENT" } })) ??
       (await tx.channel.create({ data: { operatorId, type: "OWN_AGENT", status: "CONNECTED" } }));
 
+    // Each seat has its own fare (sleeper and seater berths differ); the request never sets a price.
+    const fareBySeat = new Map(
+      (await tx.tripSeat.findMany({ where: { id: { in: seatIds } }, select: { id: true, fare: true } })).map((s) => [
+        s.id,
+        s.fare,
+      ]),
+    );
+
     const created = [];
     for (const p of input.passengers) {
+      const fare = fareBySeat.get(p.seatId) ?? trip.fare;
+      const commission = fare.mul(agent.commissionPct).div(100).toDecimalPlaces(2);
       const booking = await tx.booking.create({
         data: {
           operatorId,
@@ -100,7 +109,7 @@ export async function createBooking(ctx: { operatorId: string; agentId: string }
           agentId,
           source: input.source,
           pnr,
-          fare: trip.fare,
+          fare,
           status: "CONFIRMED",
           boardingPoint: input.boardingPoint,
           droppingPoint: input.droppingPoint,
@@ -118,9 +127,15 @@ export async function createBooking(ctx: { operatorId: string; agentId: string }
               idProofEnc: encrypt(p.idProofNumber),
             },
           },
-          commission: { create: { operatorId, agentId, amount: commissionEach } },
+          commission: { create: { operatorId, agentId, amount: commission } },
         },
-        select: { id: true, fare: true, tripSeat: { select: { seatNumber: true } }, passenger: { select: { name: true } } },
+        select: {
+          id: true,
+          fare: true,
+          tripSeat: { select: { seatNumber: true } },
+          passenger: { select: { name: true } },
+          commission: { select: { amount: true } },
+        },
       });
       created.push(booking);
     }
@@ -129,8 +144,8 @@ export async function createBooking(ctx: { operatorId: string; agentId: string }
 
   return {
     pnr,
-    totalFare: trip.fare.mul(bookings.length).toFixed(2),
-    commission: commissionEach.mul(bookings.length).toFixed(2),
+    totalFare: bookings.reduce((sum, b) => sum.add(b.fare), trip.fare.mul(0)).toFixed(2),
+    commission: bookings.reduce((sum, b) => sum.add(b.commission?.amount ?? 0), trip.fare.mul(0)).toFixed(2),
     boardingPoint: input.boardingPoint,
     droppingPoint: input.droppingPoint,
     trip: {

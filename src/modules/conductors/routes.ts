@@ -1,7 +1,7 @@
 import bcrypt from "bcrypt";
 import { Router } from "express";
 import { z } from "zod";
-import { idParam, isPrismaError, listQuery, mobile, newPassword, personName } from "../../core/accounts";
+import { idParam, isInUseError, isPrismaError, listQuery, mobile, newPassword, personName } from "../../core/accounts";
 import { prisma } from "../../core/db";
 import { AppError } from "../../core/errors";
 
@@ -162,7 +162,7 @@ conductorsRouter.delete("/:id", async (req, res) => {
       await tx.refreshToken.deleteMany({ where: { accountType: "CONDUCTOR", accountId: id } });
     });
   } catch (err) {
-    if (isPrismaError(err, "P2003")) {
+    if (isInUseError(err)) {
       throw new AppError(409, "CONFLICT", "This conductor has past trips. Set them to Inactive instead.");
     }
     throw err;

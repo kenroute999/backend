@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { idParam, isPrismaError, listQuery, mobile, personName } from "../../core/accounts";
+import { idParam, isInUseError, isPrismaError, listQuery, mobile, personName } from "../../core/accounts";
 import { prisma } from "../../core/db";
 import { AppError } from "../../core/errors";
 
@@ -84,7 +84,7 @@ driversRouter.delete("/:id", async (req, res) => {
     await prisma.driver.delete({ where: { id } });
   } catch (err) {
     // Referenced by trips: history must be kept.
-    if (isPrismaError(err, "P2003")) {
+    if (isInUseError(err)) {
       throw new AppError(409, "CONFLICT", "This driver has trips. Set them to Inactive instead.");
     }
     throw err;

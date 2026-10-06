@@ -190,6 +190,16 @@ describe("booking seats", () => {
     expect(await prisma.booking.count({ where: { tripSeatId: seats[0]!.id } })).toBe(2);
   });
 
+  it("an agent who has sold tickets cannot be deleted, only deactivated", async () => {
+    const a = await addAgent(ids.operatorId, "anil@example.com");
+    const { trip, seats } = await tripIn(ids.operatorId, 30);
+    await as("AGENT", a.id, ids.operatorId).post("/api/v1/booking/bookings").send(order(trip.id, [person(seats[0]!.id)])).expect(201);
+
+    const res = await as("OWNER", ids.userId, ids.operatorId).delete(`/api/v1/agents/${a.id}`).expect(409);
+    expect(res.body.error.code).toBe("CONFLICT");
+    expect(await prisma.agent.count({ where: { id: a.id } })).toBe(1);
+  });
+
   it("will not cancel after the bus has left or once the passenger has boarded", async () => {
     const a = await addAgent(ids.operatorId, "anil@example.com");
     const { trip, seats } = await tripIn(ids.operatorId, 30);

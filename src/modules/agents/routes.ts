@@ -4,7 +4,7 @@ import { z } from "zod";
 import {
   assertEmailFree,
   idParam,
-  isPrismaError,
+  isInUseError, isPrismaError,
   listQuery,
   loginEmail,
   mobile,
@@ -145,7 +145,7 @@ agentsRouter.delete("/:id", async (req, res) => {
     await prisma.agent.delete({ where: { id } });
   } catch (err) {
     // Referenced by bookings or commission rows: history must be kept.
-    if (isPrismaError(err, "P2003")) {
+    if (isInUseError(err)) {
       throw new AppError(409, "CONFLICT", "This agent has bookings. Set them to Inactive instead.");
     }
     throw err;
