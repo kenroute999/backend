@@ -7,9 +7,12 @@
     "doc": "docs"
   },
   "scripts": {
-    "test": "jest",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
     "typecheck": "tsc --noEmit",
-    "migrate:test": "node -e \"require('dotenv/config');process.env.DATABASE_URL=process.env.DATABASE_URL_TEST;require('child_process').execSync('npx prisma migrate deploy',{stdio:'inherit'})\""
+    "migrate:test": "node -e \"require('dotenv/config');process.env.DATABASE_URL=process.env.DATABASE_URL_TEST;require('child_process').execSync('npx prisma migrate deploy',{stdio:'inherit'})\"",
+    "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
+    "seed": "ts-node --transpile-only prisma/seed.ts",
+    "studio": "prisma studio"
   },
   "keywords": [],
   "author": "",

@@ -2,27 +2,33 @@
 // Every table except Operator carries operatorId for tenant isolation.
 
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider            = "prisma-client"
+  output              = "../generated/prisma"
+  moduleFormat        = "cjs"
+  importFileExtension = ""
 }
 
 datasource db {
   provider = "postgresql"
 }
 
+/// Roles of back-office accounts in the User table.
 enum Role {
+  OWNER
+}
+
+/// Which table a login account lives in: User (owners), Agent or Conductor.
+enum AccountType {
   OWNER
   AGENT
   CONDUCTOR
-  DRIVER
 }
 
-enum BusType {
-  AC_SLEEPER
-  NON_AC_SLEEPER
-  AC_SEATER
-  NON_AC_SEATER
-  AC_SEMI_SLEEPER
+/// Seating arrangement; AC or non-AC is a separate flag on Bus.
+enum SeatingType {
+  SLEEPER
+  SEATER
+  SEATER_SLEEPER
 }
 
 enum BusStatus {
@@ -134,6 +140,9 @@ model Operator {
   updatedAt DateTime @updatedAt
 
   users           User[]
+  agents          Agent[]
+  conductors      Conductor[]
+  drivers         Driver[]
   refreshTokens   RefreshToken[]
   auditLogs       AuditLog[]
   seatLayouts     SeatLayout[]
@@ -152,74 +161,124 @@ model Operator {
   notifications   Notification[]
 }
 
-/// Every staff member. Owners, agents and conductors log in; drivers are
-/// records only, so email and passwordHash are optional.
+/// Back-office login accounts (the operator's owner). Agents, conductors
+/// and drivers each have their own table.
 model User {
   id                 String   @id @default(uuid()) @db.Uuid
   operatorId         String   @db.Uuid
-  role               Role
+  role               Role     @default(OWNER)
   name               String
-  /// Globally unique so login needs only email + password.
-  email              String?  @unique
+  /// Login email. Kept unique across User and Agent by the API.
+  email              String   @unique
   phone              String?
-  passwordHash       String?
+  passwordHash       String
   mustChangePassword Boolean  @default(true)
   isActive           Boolean  @default(true)
-  /// Agents only.
-  agentCode          String?
-  commissionPct      Decimal? @db.Decimal(5, 2)
-  /// Drivers only.
-  licenseNo          String?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  operator          Operator           @relation(fields: [operatorId], references: [id])
-  refreshTokens     RefreshToken[]
-  auditLogs         AuditLog[]
-  conductorTrips    Trip[]             @relation("ConductorTrips")
-  driverTrips       Trip[]             @relation("DriverTrips")
-  heldSeats         TripSeat[]         @relation("SeatHolder")
-  agentBookings     Booking[]          @relation("AgentBookings")
-  boardedPassengers Passenger[]        @relation("BoardedBy")
-  commissions       CommissionLedger[]
-  payouts           Payout[]
-  supportTickets    SupportTicket[]
-  supportMessages   SupportMessage[]
-  notifications     Notification[]
+  operator Operator @relation(fields: [operatorId], references: [id])
+
+  @@index([operatorId])
+}
+
+/// Ticket agents. They sign in to the Agent app with email and password.
+model Agent {
+  id                 String   @id @default(uuid()) @db.Uuid
+  operatorId         String   @db.Uuid
+  name               String
+  phone              String
+  /// Login email. Kept unique across User and Agent by the API.
+  email              String   @unique
+  passwordHash       String
+  mustChangePassword Boolean  @default(true)
+  isActive           Boolean  @default(true)
+  agentCode          String
+  commissionPct      Decimal  @db.Decimal(5, 2)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  operator       Operator           @relation(fields: [operatorId], references: [id])
+  heldSeats      TripSeat[]
+  bookings       Booking[]
+  commissions    CommissionLedger[]
+  payouts        Payout[]
+  supportTickets SupportTicket[]
 
   @@unique([operatorId, agentCode])
-  @@index([operatorId, role])
+  @@index([operatorId])
+}
+
+/// Conductors. They sign in to the Conductor app with mobile number and
+/// password, so phone is unique across all conductors.
+model Conductor {
+  id                 String   @id @default(uuid()) @db.Uuid
+  operatorId         String   @db.Uuid
+  name               String
+  phone              String   @unique
+  passwordHash       String
+  mustChangePassword Boolean  @default(true)
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  operator          Operator    @relation(fields: [operatorId], references: [id])
+  /// The owner assigns a conductor to a trip (bus + route + date and time).
+  trips             Trip[]
+  boardedPassengers Passenger[]
+
+  @@index([operatorId])
+}
+
+/// Drivers are records only; they never sign in.
+model Driver {
+  id              String   @id @default(uuid()) @db.Uuid
+  operatorId      String   @db.Uuid
+  name            String
+  phone           String
+  licenseNo       String
+  experienceYears Int
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  operator Operator @relation(fields: [operatorId], references: [id])
+  trips    Trip[]
+
+  @@unique([operatorId, licenseNo])
 }
 
 /// Only a hash of the refresh token is stored.
 model RefreshToken {
-  id         String    @id @default(uuid()) @db.Uuid
-  operatorId String    @db.Uuid
-  userId     String    @db.Uuid
-  tokenHash  String    @unique
-  expiresAt  DateTime
-  revokedAt  DateTime?
-  createdAt  DateTime  @default(now())
+  id          String      @id @default(uuid()) @db.Uuid
+  operatorId  String      @db.Uuid
+  /// The account is in User, Agent or Conductor depending on accountType.
+  accountType AccountType
+  accountId   String      @db.Uuid
+  tokenHash   String      @unique
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime    @default(now())
 
   operator Operator @relation(fields: [operatorId], references: [id])
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId])
+  @@index([accountType, accountId])
 }
 
 model AuditLog {
-  id         String   @id @default(uuid()) @db.Uuid
-  operatorId String   @db.Uuid
-  userId     String?  @db.Uuid
+  id         String       @id @default(uuid()) @db.Uuid
+  operatorId String       @db.Uuid
+  /// Who did it; null for system actions.
+  actorType  AccountType?
+  actorId    String?      @db.Uuid
   /// e.g. "bus.create", "trip.cancel"
   action     String
   entity     String
   entityId   String?
   meta       Json?
-  createdAt  DateTime @default(now())
+  createdAt  DateTime     @default(now())
 
   operator Operator @relation(fields: [operatorId], references: [id])
-  user     User?    @relation(fields: [userId], references: [id])
 
   @@index([operatorId, createdAt])
 }
@@ -242,15 +301,16 @@ model SeatLayout {
 }
 
 model Bus {
-  id             String    @id @default(uuid()) @db.Uuid
-  operatorId     String    @db.Uuid
+  id             String      @id @default(uuid()) @db.Uuid
+  operatorId     String      @db.Uuid
   registrationNo String
   name           String?
-  type           BusType
-  status         BusStatus @default(ACTIVE)
-  seatLayoutId   String    @db.Uuid
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  isAc           Boolean     @default(true)
+  seating        SeatingType
+  status         BusStatus   @default(ACTIVE)
+  seatLayoutId   String      @db.Uuid
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
 
   operator   Operator   @relation(fields: [operatorId], references: [id])
   seatLayout SeatLayout @relation(fields: [seatLayoutId], references: [id])
@@ -317,8 +377,8 @@ model Trip {
   operator  Operator   @relation(fields: [operatorId], references: [id])
   bus       Bus        @relation(fields: [busId], references: [id])
   route     Route      @relation(fields: [routeId], references: [id])
-  conductor User?      @relation("ConductorTrips", fields: [conductorId], references: [id])
-  driver    User?      @relation("DriverTrips", fields: [driverId], references: [id])
+  conductor Conductor? @relation(fields: [conductorId], references: [id])
+  driver    Driver?    @relation(fields: [driverId], references: [id])
   seats     TripSeat[]
   bookings  Booking[]
 
@@ -343,7 +403,7 @@ model TripSeat {
 
   operator Operator  @relation(fields: [operatorId], references: [id])
   trip     Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  heldBy   User?     @relation("SeatHolder", fields: [heldById], references: [id])
+  heldBy   Agent?    @relation(fields: [heldById], references: [id])
   bookings Booking[]
 
   @@unique([tripId, seatNumber])
@@ -386,7 +446,7 @@ model Booking {
   trip       Trip              @relation(fields: [tripId], references: [id])
   tripSeat   TripSeat          @relation(fields: [tripSeatId], references: [id])
   channel    Channel           @relation(fields: [channelId], references: [id])
-  agent      User?             @relation("AgentBookings", fields: [agentId], references: [id])
+  agent      Agent?            @relation(fields: [agentId], references: [id])
   offer      Offer?            @relation(fields: [offerId], references: [id])
   passenger  Passenger?
   commission CommissionLedger?
@@ -419,9 +479,9 @@ model Passenger {
   /// sync retries idempotent.
   boardEventId String?   @unique
 
-  operator  Operator @relation(fields: [operatorId], references: [id])
-  booking   Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
-  boardedBy User?    @relation("BoardedBy", fields: [boardedById], references: [id])
+  operator  Operator   @relation(fields: [operatorId], references: [id])
+  booking   Booking    @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  boardedBy Conductor? @relation(fields: [boardedById], references: [id])
 
   @@index([operatorId, phoneHash])
 }
@@ -439,7 +499,7 @@ model CommissionLedger {
   updatedAt  DateTime         @updatedAt
 
   operator Operator @relation(fields: [operatorId], references: [id])
-  agent    User     @relation(fields: [agentId], references: [id])
+  agent    Agent    @relation(fields: [agentId], references: [id])
   booking  Booking  @relation(fields: [bookingId], references: [id])
   payout   Payout?  @relation(fields: [payoutId], references: [id])
 
@@ -459,7 +519,7 @@ model Payout {
   note        String?
 
   operator    Operator           @relation(fields: [operatorId], references: [id])
-  agent       User               @relation(fields: [agentId], references: [id])
+  agent       Agent              @relation(fields: [agentId], references: [id])
   commissions CommissionLedger[]
 
   @@index([operatorId, status, requestedAt])
@@ -494,8 +554,8 @@ model Offer {
 model SupportTicket {
   id         String         @id @default(uuid()) @db.Uuid
   operatorId String         @db.Uuid
-  /// The user who raised it.
-  userId     String         @db.Uuid
+  /// The agent who raised it.
+  agentId    String         @db.Uuid
   subject    String
   category   String
   priority   TicketPriority @default(MEDIUM)
@@ -505,42 +565,43 @@ model SupportTicket {
   updatedAt  DateTime       @updatedAt
 
   operator Operator         @relation(fields: [operatorId], references: [id])
-  user     User             @relation(fields: [userId], references: [id])
+  agent    Agent            @relation(fields: [agentId], references: [id])
   messages SupportMessage[]
 
   @@index([operatorId, status, createdAt])
-  @@index([operatorId, userId])
+  @@index([operatorId, agentId])
 }
 
 model SupportMessage {
-  id         String   @id @default(uuid()) @db.Uuid
-  operatorId String   @db.Uuid
-  ticketId   String   @db.Uuid
-  authorId   String   @db.Uuid
+  id         String      @id @default(uuid()) @db.Uuid
+  operatorId String      @db.Uuid
+  ticketId   String      @db.Uuid
+  /// Written by the agent or by the owner.
+  authorType AccountType
+  authorId   String      @db.Uuid
   body       String
-  createdAt  DateTime @default(now())
+  createdAt  DateTime    @default(now())
 
   operator Operator      @relation(fields: [operatorId], references: [id])
   ticket   SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  author   User          @relation(fields: [authorId], references: [id])
 
   @@index([ticketId, createdAt])
   @@index([operatorId])
 }
 
-/// userId null = addressed to every user of the operator.
+/// recipientId null = addressed to everyone at the operator.
 model Notification {
-  id         String    @id @default(uuid()) @db.Uuid
-  operatorId String    @db.Uuid
-  userId     String?   @db.Uuid
-  type       String
-  title      String
-  body       String
-  readAt     DateTime?
-  createdAt  DateTime  @default(now())
+  id            String       @id @default(uuid()) @db.Uuid
+  operatorId    String       @db.Uuid
+  recipientType AccountType?
+  recipientId   String?      @db.Uuid
+  type          String
+  title         String
+  body          String
+  readAt        DateTime?
+  createdAt     DateTime     @default(now())
 
   operator Operator @relation(fields: [operatorId], references: [id])
-  user     User?    @relation(fields: [userId], references: [id])
 
-  @@index([operatorId, userId, createdAt])
+  @@index([operatorId, recipientType, recipientId, createdAt])
 }

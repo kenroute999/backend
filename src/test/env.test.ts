@@ -14,7 +14,7 @@ describe("test database", () => {
     const tables = await client.query(
       "SELECT count(*)::int AS n FROM information_schema.tables WHERE table_schema = 'public' AND table_name <> '_prisma_migrations'",
     );
-    expect(tables.rows[0].n).toBe(18);
+    expect(tables.rows[0].n).toBe(21);
     const index = await client.query("SELECT indexdef FROM pg_indexes WHERE indexname = 'booking_active_seat'");
     expect(index.rows[0].indexdef).toContain("UNIQUE");
     expect(index.rows[0].indexdef).toContain("WHERE");
