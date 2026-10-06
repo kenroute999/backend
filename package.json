@@ -1,0 +1,50 @@
+{
+  "name": "p7-kennytorus",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "jest",
+    "typecheck": "tsc --noEmit",
+    "migrate:test": "node -e \"require('dotenv/config');process.env.DATABASE_URL=process.env.DATABASE_URL_TEST;require('child_process').execSync('npx prisma migrate deploy',{stdio:'inherit'})\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/client": "^7.9.0",
+    "bcrypt": "^6.0.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.6.0",
+    "jsonwebtoken": "^9.0.3",
+    "pg": "^8.23.1",
+    "socket.io": "^4.8.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^6.0.0",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jest": "^30.0.0",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^26.1.1",
+    "@types/pg": "^8.23.1",
+    "@types/supertest": "^7.2.1",
+    "eslint": "^10.7.0",
+    "jest": "^30.4.2",
+    "prettier": "^3.9.6",
+    "prisma": "^7.9.0",
+    "supertest": "^7.2.2",
+    "ts-jest": "^29.4.11",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^6.0.3"
+  }
+}

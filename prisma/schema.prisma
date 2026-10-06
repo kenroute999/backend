@@ -1,0 +1,546 @@
+// KenRoute — full schema (18 tables), covered by the single `init` migration.
+// Every table except Operator carries operatorId for tenant isolation.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  OWNER
+  AGENT
+  CONDUCTOR
+  DRIVER
+}
+
+enum BusType {
+  AC_SLEEPER
+  NON_AC_SLEEPER
+  AC_SEATER
+  NON_AC_SEATER
+  AC_SEMI_SLEEPER
+}
+
+enum BusStatus {
+  ACTIVE
+  MAINTENANCE
+  INACTIVE
+}
+
+enum ChannelType {
+  OWN_AGENT
+  REDBUS
+  ABHIBUS
+}
+
+enum ChannelStatus {
+  READY
+  PENDING
+  CONFIGURED
+  CONNECTED
+  ERROR
+}
+
+enum TripStatus {
+  SCHEDULED
+  BOARDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum Deck {
+  LOWER
+  UPPER
+}
+
+enum SeatStatus {
+  AVAILABLE
+  HELD
+  BOOKED
+  BLOCKED
+}
+
+enum BookingStatus {
+  CREATED
+  CONFIRMED
+  BOARDED
+  COMPLETED
+  CANCELLED
+  REFUNDED
+}
+
+enum BookingSource {
+  AGENT
+  COUNTER
+  PHONE
+  CORPORATE
+  OTA
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum PaymentMode {
+  CASH
+  UPI
+}
+
+enum CommissionStatus {
+  PENDING
+  PAID
+  VOID
+}
+
+enum PayoutStatus {
+  REQUESTED
+  PAID
+  REJECTED
+}
+
+enum OfferType {
+  PERCENT
+  FLAT
+}
+
+enum TicketStatus {
+  OPEN
+  PENDING
+  RESOLVED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+/// Tenant root: one bus company.
+model Operator {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  plan      String   @default("standard")
+  phone     String?
+  email     String?
+  address   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users           User[]
+  refreshTokens   RefreshToken[]
+  auditLogs       AuditLog[]
+  seatLayouts     SeatLayout[]
+  buses           Bus[]
+  routes          Route[]
+  channels        Channel[]
+  trips           Trip[]
+  tripSeats       TripSeat[]
+  bookings        Booking[]
+  passengers      Passenger[]
+  commissions     CommissionLedger[]
+  payouts         Payout[]
+  offers          Offer[]
+  supportTickets  SupportTicket[]
+  supportMessages SupportMessage[]
+  notifications   Notification[]
+}
+
+/// Every staff member. Owners, agents and conductors log in; drivers are
+/// records only, so email and passwordHash are optional.
+model User {
+  id                 String   @id @default(uuid()) @db.Uuid
+  operatorId         String   @db.Uuid
+  role               Role
+  name               String
+  /// Globally unique so login needs only email + password.
+  email              String?  @unique
+  phone              String?
+  passwordHash       String?
+  mustChangePassword Boolean  @default(true)
+  isActive           Boolean  @default(true)
+  /// Agents only.
+  agentCode          String?
+  commissionPct      Decimal? @db.Decimal(5, 2)
+  /// Drivers only.
+  licenseNo          String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  operator          Operator           @relation(fields: [operatorId], references: [id])
+  refreshTokens     RefreshToken[]
+  auditLogs         AuditLog[]
+  conductorTrips    Trip[]             @relation("ConductorTrips")
+  driverTrips       Trip[]             @relation("DriverTrips")
+  heldSeats         TripSeat[]         @relation("SeatHolder")
+  agentBookings     Booking[]          @relation("AgentBookings")
+  boardedPassengers Passenger[]        @relation("BoardedBy")
+  commissions       CommissionLedger[]
+  payouts           Payout[]
+  supportTickets    SupportTicket[]
+  supportMessages   SupportMessage[]
+  notifications     Notification[]
+
+  @@unique([operatorId, agentCode])
+  @@index([operatorId, role])
+}
+
+/// Only a hash of the refresh token is stored.
+model RefreshToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  operatorId String    @db.Uuid
+  userId     String    @db.Uuid
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  operator Operator @relation(fields: [operatorId], references: [id])
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  operatorId String   @db.Uuid
+  userId     String?  @db.Uuid
+  /// e.g. "bus.create", "trip.cancel"
+  action     String
+  entity     String
+  entityId   String?
+  meta       Json?
+  createdAt  DateTime @default(now())
+
+  operator Operator @relation(fields: [operatorId], references: [id])
+  user     User?    @relation(fields: [userId], references: [id])
+
+  @@index([operatorId, createdAt])
+}
+
+/// Reusable seat arrangement. `seats` is an array of
+/// { number, deck, row, col, type } copied into TripSeat rows per trip.
+model SeatLayout {
+  id         String   @id @default(uuid()) @db.Uuid
+  operatorId String   @db.Uuid
+  name       String
+  seats      Json
+  totalSeats Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  operator Operator @relation(fields: [operatorId], references: [id])
+  buses    Bus[]
+
+  @@unique([operatorId, name])
+}
+
+model Bus {
+  id             String    @id @default(uuid()) @db.Uuid
+  operatorId     String    @db.Uuid
+  registrationNo String
+  name           String?
+  type           BusType
+  status         BusStatus @default(ACTIVE)
+  seatLayoutId   String    @db.Uuid
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  operator   Operator   @relation(fields: [operatorId], references: [id])
+  seatLayout SeatLayout @relation(fields: [seatLayoutId], references: [id])
+  trips      Trip[]
+
+  @@unique([operatorId, registrationNo])
+}
+
+model Route {
+  id             String   @id @default(uuid()) @db.Uuid
+  operatorId     String   @db.Uuid
+  origin         String
+  destination    String
+  distanceKm     Int?
+  durationMin    Int?
+  baseFare       Decimal  @db.Decimal(10, 2)
+  boardingPoints String[]
+  droppingPoints String[]
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  operator Operator @relation(fields: [operatorId], references: [id])
+  trips    Trip[]
+
+  @@unique([operatorId, origin, destination])
+}
+
+/// One row per sales channel per operator. Credentials are stored
+/// encrypted by the server and never returned in full.
+model Channel {
+  id             String        @id @default(uuid()) @db.Uuid
+  operatorId     String        @db.Uuid
+  type           ChannelType
+  status         ChannelStatus @default(READY)
+  credentialsEnc String?
+  config         Json?
+  lastSyncAt     DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  operator Operator  @relation(fields: [operatorId], references: [id])
+  bookings Booking[]
+
+  @@unique([operatorId, type])
+}
+
+/// One bus on one route at one departure time.
+model Trip {
+  id          String     @id @default(uuid()) @db.Uuid
+  operatorId  String     @db.Uuid
+  busId       String     @db.Uuid
+  routeId     String     @db.Uuid
+  conductorId String?    @db.Uuid
+  driverId    String?    @db.Uuid
+  departureAt DateTime
+  arrivalAt   DateTime
+  /// Copied from Route.baseFare at creation; owner may override per trip.
+  fare        Decimal    @db.Decimal(10, 2)
+  status      TripStatus @default(SCHEDULED)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  operator  Operator   @relation(fields: [operatorId], references: [id])
+  bus       Bus        @relation(fields: [busId], references: [id])
+  route     Route      @relation(fields: [routeId], references: [id])
+  conductor User?      @relation("ConductorTrips", fields: [conductorId], references: [id])
+  driver    User?      @relation("DriverTrips", fields: [driverId], references: [id])
+  seats     TripSeat[]
+  bookings  Booking[]
+
+  @@index([operatorId, departureAt])
+  @@index([busId, departureAt])
+  @@index([conductorId, departureAt])
+}
+
+/// A single seat on a specific trip, generated from the bus's SeatLayout.
+model TripSeat {
+  id         String     @id @default(uuid()) @db.Uuid
+  operatorId String     @db.Uuid
+  tripId     String     @db.Uuid
+  seatNumber String
+  deck       Deck
+  row        Int
+  col        Int
+  seatType   String     @default("SLEEPER")
+  status     SeatStatus @default(AVAILABLE)
+  heldUntil  DateTime?
+  heldById   String?    @db.Uuid
+
+  operator Operator  @relation(fields: [operatorId], references: [id])
+  trip     Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  heldBy   User?     @relation("SeatHolder", fields: [heldById], references: [id])
+  bookings Booking[]
+
+  @@unique([tripId, seatNumber])
+  @@index([operatorId])
+}
+
+/// One sold seat. A group purchase is several rows sharing one pnr.
+/// A seat may have many cancelled bookings but only one active one:
+/// enforced by a partial unique index added by hand in the first migration
+///   CREATE UNIQUE INDEX booking_active_seat ON "Booking" ("tripSeatId")
+///   WHERE status NOT IN ('CANCELLED', 'REFUNDED');
+model Booking {
+  id            String        @id @default(uuid()) @db.Uuid
+  operatorId    String        @db.Uuid
+  tripId        String        @db.Uuid
+  tripSeatId    String        @db.Uuid
+  channelId     String        @db.Uuid
+  /// Null for OTA bookings.
+  agentId       String?       @db.Uuid
+  source        BookingSource
+  /// The OTA's own booking id; used to skip duplicates on CSV re-import.
+  externalRef   String?
+  pnr           String
+  fare          Decimal       @db.Decimal(10, 2)
+  status        BookingStatus @default(CONFIRMED)
+  refundAmount  Decimal?      @db.Decimal(10, 2)
+  /// Null for OTA imports, which carry no such details.
+  boardingPoint String?
+  droppingPoint String?
+  paymentMode   PaymentMode?
+  notes         String?
+  offerId       String?       @db.Uuid
+  discount      Decimal       @default(0) @db.Decimal(10, 2)
+  boardedAt     DateTime?
+  cancelledAt   DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  operator   Operator          @relation(fields: [operatorId], references: [id])
+  trip       Trip              @relation(fields: [tripId], references: [id])
+  tripSeat   TripSeat          @relation(fields: [tripSeatId], references: [id])
+  channel    Channel           @relation(fields: [channelId], references: [id])
+  agent      User?             @relation("AgentBookings", fields: [agentId], references: [id])
+  offer      Offer?            @relation(fields: [offerId], references: [id])
+  passenger  Passenger?
+  commission CommissionLedger?
+
+  @@unique([channelId, externalRef])
+  @@index([operatorId, pnr])
+  @@index([operatorId, createdAt])
+  @@index([tripId])
+  @@index([agentId])
+  @@index([offerId])
+}
+
+/// The rider for one booking. Phone and ID proof are stored encrypted;
+/// phoneHash allows exact-match search without decrypting.
+model Passenger {
+  id           String    @id @default(uuid()) @db.Uuid
+  operatorId   String    @db.Uuid
+  bookingId    String    @unique @db.Uuid
+  name         String
+  phoneEnc     String
+  phoneHash    String
+  age          Int?
+  gender       Gender?
+  idProofType  String?
+  idProofEnc   String?
+  boarded      Boolean   @default(false)
+  boardedAt    DateTime?
+  boardedById  String?   @db.Uuid
+  /// Id generated by the conductor app per boarding action; makes offline
+  /// sync retries idempotent.
+  boardEventId String?   @unique
+
+  operator  Operator @relation(fields: [operatorId], references: [id])
+  booking   Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  boardedBy User?    @relation("BoardedBy", fields: [boardedById], references: [id])
+
+  @@index([operatorId, phoneHash])
+}
+
+/// Commission owed to an agent for one booking.
+model CommissionLedger {
+  id         String           @id @default(uuid()) @db.Uuid
+  operatorId String           @db.Uuid
+  agentId    String           @db.Uuid
+  bookingId  String           @unique @db.Uuid
+  amount     Decimal          @db.Decimal(10, 2)
+  status     CommissionStatus @default(PENDING)
+  payoutId   String?          @db.Uuid
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  operator Operator @relation(fields: [operatorId], references: [id])
+  agent    User     @relation(fields: [agentId], references: [id])
+  booking  Booking  @relation(fields: [bookingId], references: [id])
+  payout   Payout?  @relation(fields: [payoutId], references: [id])
+
+  @@index([operatorId, agentId, status])
+  @@index([payoutId])
+}
+
+/// An agent's request to be paid their pending commission.
+model Payout {
+  id          String       @id @default(uuid()) @db.Uuid
+  operatorId  String       @db.Uuid
+  agentId     String       @db.Uuid
+  amount      Decimal      @db.Decimal(10, 2)
+  status      PayoutStatus @default(REQUESTED)
+  requestedAt DateTime     @default(now())
+  resolvedAt  DateTime?
+  note        String?
+
+  operator    Operator           @relation(fields: [operatorId], references: [id])
+  agent       User               @relation(fields: [agentId], references: [id])
+  commissions CommissionLedger[]
+
+  @@index([operatorId, status, requestedAt])
+  @@index([operatorId, agentId])
+}
+
+/// Discount code.
+model Offer {
+  id          String    @id @default(uuid()) @db.Uuid
+  operatorId  String    @db.Uuid
+  code        String
+  title       String
+  type        OfferType
+  /// Percentage for PERCENT, rupees for FLAT.
+  value       Decimal   @db.Decimal(10, 2)
+  maxDiscount Decimal?  @db.Decimal(10, 2)
+  minFare     Decimal?  @db.Decimal(10, 2)
+  usageLimit  Int?
+  usedCount   Int       @default(0)
+  validFrom   DateTime
+  validTo     DateTime
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  operator Operator  @relation(fields: [operatorId], references: [id])
+  bookings Booking[]
+
+  @@unique([operatorId, code])
+}
+
+model SupportTicket {
+  id         String         @id @default(uuid()) @db.Uuid
+  operatorId String         @db.Uuid
+  /// The user who raised it.
+  userId     String         @db.Uuid
+  subject    String
+  category   String
+  priority   TicketPriority @default(MEDIUM)
+  status     TicketStatus   @default(OPEN)
+  pnr        String?
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  operator Operator         @relation(fields: [operatorId], references: [id])
+  user     User             @relation(fields: [userId], references: [id])
+  messages SupportMessage[]
+
+  @@index([operatorId, status, createdAt])
+  @@index([operatorId, userId])
+}
+
+model SupportMessage {
+  id         String   @id @default(uuid()) @db.Uuid
+  operatorId String   @db.Uuid
+  ticketId   String   @db.Uuid
+  authorId   String   @db.Uuid
+  body       String
+  createdAt  DateTime @default(now())
+
+  operator Operator      @relation(fields: [operatorId], references: [id])
+  ticket   SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author   User          @relation(fields: [authorId], references: [id])
+
+  @@index([ticketId, createdAt])
+  @@index([operatorId])
+}
+
+/// userId null = addressed to every user of the operator.
+model Notification {
+  id         String    @id @default(uuid()) @db.Uuid
+  operatorId String    @db.Uuid
+  userId     String?   @db.Uuid
+  type       String
+  title      String
+  body       String
+  readAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  operator Operator @relation(fields: [operatorId], references: [id])
+  user     User?    @relation(fields: [userId], references: [id])
+
+  @@index([operatorId, userId, createdAt])
+}
