@@ -164,6 +164,7 @@ const limitByAccount = rateLimit({
 export function resetLoginLimits() {
   ipStore.resetAll();
   idStore.resetAll();
+  pwStore.resetAll();
 }
 
 const loginSchema = z
@@ -224,7 +225,19 @@ authRouter.post("/logout", async (req, res) => {
 
 const changePasswordSchema = z.strictObject({ currentPassword: z.string().min(1).max(200), newPassword });
 
-authRouter.post("/change-password", requireAuth, async (req, res) => {
+// A stolen access token must not be usable to guess the current password without limit.
+const pwStore = new MemoryStore();
+const limitPasswordChange = rateLimit({
+  windowMs: WINDOW_MS,
+  limit: 8,
+  store: pwStore,
+  handler: tooMany,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  keyGenerator: (req) => `${req.auth.role}:${req.auth.userId}`,
+});
+
+authRouter.post("/change-password", requireAuth, limitPasswordChange, async (req, res) => {
   const body = changePasswordSchema.parse(req.body);
   const acc = await findById(req.auth.role, req.auth.userId);
   if (!acc?.isActive) throw new AppError(401, "UNAUTHENTICATED", "Please sign in again");

@@ -141,6 +141,16 @@ describe("sessions", () => {
     await login({ email: OWNER_EMAIL, password: "Fresh@12345" }).expect(200);
   });
 
+  it("limits guesses at the current password when changing it", async () => {
+    const client = as("OWNER", ids.userId, ids.operatorId);
+    const attempt = (currentPassword: string) =>
+      client.post("/api/v1/auth/change-password").send({ currentPassword, newPassword: "Fresh@12345" });
+    for (let i = 0; i < 8; i++) await attempt("guess").expect(400);
+    const res = await attempt(OWNER_PASSWORD).expect(429);
+    expect(res.body.error.code).toBe("RATE_LIMITED");
+    await login({ email: OWNER_EMAIL, password: OWNER_PASSWORD }).expect(200);
+  });
+
   it("deactivating an agent through the API stops their refresh token working", async () => {
     const agent = await addAgent();
     const { body } = await login({ email: "anil@example.com", password: "Agent@123" }).expect(200);
