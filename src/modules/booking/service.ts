@@ -164,3 +164,37 @@ export async function createBooking(ctx: { operatorId: string; agentId: string }
     })),
   };
 }
+
+/**
+ * Cancels a ticket before the bus leaves: the seat goes back on sale and the
+ * commission for it is voided. Any refund is handled outside KenRoute.
+ * Pass `agentId` to limit it to that agent's own tickets; the owner passes none.
+ */
+export async function cancelBooking(where: { id: string; operatorId: string; agentId?: string }) {
+  const booking = await prisma.booking.findFirst({
+    where,
+    select: { status: true, tripSeatId: true, trip: { select: { departureAt: true } } },
+  });
+  if (!booking) throw new AppError(404, "NOT_FOUND", "Ticket not found");
+  if (booking.status === "CANCELLED" || booking.status === "REFUNDED") {
+    throw new AppError(409, "CONFLICT", "This ticket is already cancelled");
+  }
+  if (booking.status !== "CONFIRMED" && booking.status !== "CREATED") {
+    throw new AppError(409, "CONFLICT", "A boarded or completed ticket cannot be cancelled");
+  }
+  if (booking.trip.departureAt <= new Date()) {
+    throw new AppError(409, "CONFLICT", "The bus has already left; this ticket can no longer be cancelled");
+  }
+
+  await prisma.$transaction(async (tx) => {
+    // Conditional on the status, so a conductor boarding the passenger at the same moment wins or loses cleanly.
+    const { count } = await tx.booking.updateMany({
+      where: { id: where.id, status: { in: ["CONFIRMED", "CREATED"] } },
+      data: { status: "CANCELLED", cancelledAt: new Date() },
+    });
+    if (count === 0) throw new AppError(409, "CONFLICT", "This ticket can no longer be cancelled");
+    await tx.tripSeat.update({ where: { id: booking.tripSeatId }, data: { status: "AVAILABLE" } });
+    await tx.commissionLedger.updateMany({ where: { bookingId: where.id, status: "PENDING" }, data: { status: "VOID" } });
+  });
+  return { id: where.id, status: "CANCELLED" as const };
+}

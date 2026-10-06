@@ -4,7 +4,7 @@ import { idParam } from "../../core/accounts";
 import { decrypt } from "../../core/crypto";
 import { prisma } from "../../core/db";
 import { AppError } from "../../core/errors";
-import { bookingInput, createBooking } from "./service";
+import { bookingInput, cancelBooking, createBooking } from "./service";
 
 // The agent's booking desk: routes the owner created, trips on a date, seats, and the booking itself.
 export const bookingRouter = Router();
@@ -150,36 +150,10 @@ bookingRouter.get("/bookings", async (req, res) => {
   res.json({ items, total: items.length });
 });
 
-// An agent cancels one of their own tickets before the bus leaves. The seat goes back on
-// sale and the commission for it is voided. Any refund is handled outside KenRoute.
+// An agent cancels one of their own tickets before the bus leaves.
 bookingRouter.post("/bookings/:id/cancel", async (req, res) => {
   const { id } = idParam.parse(req.params);
-  const booking = await prisma.booking.findFirst({
-    where: { id, operatorId: req.operatorId, agentId: req.auth.userId },
-    select: { status: true, tripSeatId: true, trip: { select: { departureAt: true } } },
-  });
-  if (!booking) throw new AppError(404, "NOT_FOUND", "Ticket not found");
-  if (booking.status === "CANCELLED" || booking.status === "REFUNDED") {
-    throw new AppError(409, "CONFLICT", "This ticket is already cancelled");
-  }
-  if (booking.status !== "CONFIRMED" && booking.status !== "CREATED") {
-    throw new AppError(409, "CONFLICT", "A boarded or completed ticket cannot be cancelled");
-  }
-  if (booking.trip.departureAt <= new Date()) {
-    throw new AppError(409, "CONFLICT", "The bus has already left; this ticket can no longer be cancelled");
-  }
-
-  await prisma.$transaction(async (tx) => {
-    // Conditional on the status, so a conductor boarding the passenger at the same moment wins or loses cleanly.
-    const { count } = await tx.booking.updateMany({
-      where: { id, status: { in: ["CONFIRMED", "CREATED"] } },
-      data: { status: "CANCELLED", cancelledAt: new Date() },
-    });
-    if (count === 0) throw new AppError(409, "CONFLICT", "This ticket can no longer be cancelled");
-    await tx.tripSeat.update({ where: { id: booking.tripSeatId }, data: { status: "AVAILABLE" } });
-    await tx.commissionLedger.updateMany({ where: { bookingId: id, status: "PENDING" }, data: { status: "VOID" } });
-  });
-  res.json({ id, status: "CANCELLED" });
+  res.json(await cancelBooking({ id, operatorId: req.operatorId, agentId: req.auth.userId }));
 });
 
 bookingRouter.post("/bookings", async (req, res) => {

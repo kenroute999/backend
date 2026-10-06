@@ -190,6 +190,39 @@ describe("booking seats", () => {
     expect(await prisma.booking.count({ where: { tripSeatId: seats[0]!.id } })).toBe(2);
   });
 
+  it("the owner sees every agent's bookings with the agent named, and can cancel one", async () => {
+    const a = await addAgent(ids.operatorId, "anil@example.com");
+    const b = await addAgent(ids.operatorId, "babu@example.com");
+    const { trip, seats } = await tripIn(ids.operatorId, 30);
+    await as("AGENT", a.id, ids.operatorId).post("/api/v1/booking/bookings").send(order(trip.id, [person(seats[0]!.id), person(seats[1]!.id)])).expect(201);
+    await as("AGENT", b.id, ids.operatorId).post("/api/v1/booking/bookings").send(order(trip.id, [person(seats[2]!.id)], { source: "COUNTER" })).expect(201);
+
+    const owner = as("OWNER", ids.userId, ids.operatorId);
+    const all = await owner.get("/api/v1/bookings").expect(200);
+    expect(all.body.total).toBe(3);
+    const first = all.body.items.find((x: { seatNumber: string }) => x.seatNumber === "L1");
+    expect(first).toMatchObject({
+      status: "CONFIRMED",
+      channel: "OWN_AGENT",
+      deck: "LOWER",
+      fare: "1200",
+      agent: { id: a.id, name: "Anil Agent" },
+      passenger: { name: "Ramesh Kumar", phone: "9876543210", idProofType: "AADHAAR", boarded: false },
+      trip: { route: { origin: "Hyderabad" } },
+    });
+    expect(JSON.stringify(all.body)).not.toMatch(/phoneEnc|idProofEnc|1234 5678 9012/);
+
+    await owner.post(`/api/v1/bookings/${first.id}/cancel`).expect(200);
+    expect((await prisma.tripSeat.findUniqueOrThrow({ where: { id: seats[0]!.id } })).status).toBe("AVAILABLE");
+
+    // Agents cannot use the owner's list, and another operator's owner sees nothing.
+    await as("AGENT", a.id, ids.operatorId).get("/api/v1/bookings").expect(403);
+    const other = await seedOwner("Other Travels", "owner@other.example.com");
+    const theirs = as("OWNER", other.userId, other.operatorId);
+    expect((await theirs.get("/api/v1/bookings").expect(200)).body.total).toBe(0);
+    await theirs.post(`/api/v1/bookings/${all.body.items[0].id}/cancel`).expect(404);
+  });
+
   it("an agent who has sold tickets cannot be deleted, only deactivated", async () => {
     const a = await addAgent(ids.operatorId, "anil@example.com");
     const { trip, seats } = await tripIn(ids.operatorId, 30);
