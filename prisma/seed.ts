@@ -5,6 +5,7 @@ import { createTripWithSeats } from "../src/modules/trips/service";
 // Safe to run repeatedly: existing rows are left alone.
 const OPERATOR = "Sri Krishna Travels";
 const AGENT_PASSWORD = "Agent@123";
+const OWNER = { name: "Sri Krishna Owner", email: "owner@srikrishna.test", password: "Owner@123" };
 
 const agents = [
   { name: "Ravi Travels", phone: "9988776655", email: "ravi@example.com", commissionPct: 8, agentCode: "AGT1001", isActive: true },
@@ -70,6 +71,17 @@ async function main() {
   const operatorId = operator.id;
   const passwordHash = await bcrypt.hash(AGENT_PASSWORD, 10);
 
+  if (!(await prisma.user.findUnique({ where: { email: OWNER.email } }))) {
+    await prisma.user.create({
+      data: {
+        operatorId,
+        name: OWNER.name,
+        email: OWNER.email,
+        passwordHash: await bcrypt.hash(OWNER.password, 10),
+        mustChangePassword: false,
+      },
+    });
+  }
   for (const a of agents) {
     if (await prisma.agent.findUnique({ where: { email: a.email } })) continue;
     await prisma.agent.create({ data: { ...a, operatorId, passwordHash } });

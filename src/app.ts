@@ -1,9 +1,10 @@
 import cors from "cors";
 import express from "express";
+import { requireAuth, requireRole } from "./core/auth";
 import { config } from "./core/config";
-import { devTenant } from "./core/dev-tenant";
 import { errorHandler, notFound } from "./core/errors";
 import { agentsRouter } from "./modules/agents/routes";
+import { authRouter, me } from "./modules/auth/routes";
 import { busesRouter } from "./modules/buses/routes";
 import { conductorsRouter } from "./modules/conductors/routes";
 import { driversRouter } from "./modules/drivers/routes";
@@ -19,12 +20,17 @@ const api = express.Router();
 api.get("/health", (_req, res) => {
   res.json({ status: "ok" });
 });
-api.use("/agents", devTenant, agentsRouter);
-api.use("/drivers", devTenant, driversRouter);
-api.use("/conductors", devTenant, conductorsRouter);
-api.use("/buses", devTenant, busesRouter);
-api.use("/routes", devTenant, routesRouter);
-api.use("/trips", devTenant, tripsRouter);
+api.use("/auth", authRouter);
+api.get("/me", requireAuth, me);
+
+// Everything below is the owner's back office.
+const owner = [requireAuth, requireRole("OWNER")];
+api.use("/agents", owner, agentsRouter);
+api.use("/drivers", owner, driversRouter);
+api.use("/conductors", owner, conductorsRouter);
+api.use("/buses", owner, busesRouter);
+api.use("/routes", owner, routesRouter);
+api.use("/trips", owner, tripsRouter);
 
 app.use("/api/v1", api);
 app.use(notFound);

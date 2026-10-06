@@ -1,8 +1,6 @@
 import bcrypt from "bcrypt";
-import request from "supertest";
-import { app } from "../../app";
 import { prisma } from "../../core/db";
-import { resetDevTenant } from "../../core/dev-tenant";
+import { as, cleanDb, seedOwner } from "../../test/helpers";
 import { createTripWithSeats } from "../trips/service";
 
 const conductor = { name: "Suresh Conductor", phone: "9111111111", password: "Secret@123" };
@@ -37,29 +35,19 @@ async function fleet(operatorId: string, ...departInHours: number[]) {
   return { bus, route, trips };
 }
 
-const devOperatorId = async () => (await prisma.operator.findFirstOrThrow()).id;
+let ids: { operatorId: string; userId: string };
+const owner = () => as("OWNER", ids.userId, ids.operatorId);
 
 beforeEach(async () => {
-  await prisma.refreshToken.deleteMany();
-  await prisma.trip.deleteMany();
-  await prisma.conductor.deleteMany();
-  await prisma.bus.deleteMany();
-  await prisma.seatLayout.deleteMany();
-  await prisma.route.deleteMany();
-  await prisma.agent.deleteMany();
-  await prisma.driver.deleteMany();
-  await prisma.user.deleteMany();
-  await prisma.operator.deleteMany();
-  resetDevTenant();
+  await cleanDb();
+  ids = await seedOwner();
 });
 
 afterAll(() => prisma.$disconnect());
 
 describe("trips", () => {
   it("creates one seat per layout seat, takes the route fare, and rejects an overlapping trip for the bus", async () => {
-    await request(app).get("/api/v1/health").expect(200);
-    await request(app).get("/api/v1/trips").expect(200); // creates the dev operator
-    const operatorId = await devOperatorId();
+    const { operatorId } = ids;
     const { bus, route, trips } = await fleet(operatorId, 24);
 
     expect(await prisma.tripSeat.count({ where: { tripId: trips[0]!.id } })).toBe(3);
@@ -76,10 +64,9 @@ describe("trips", () => {
   });
 
   it("lists only upcoming trips, soonest first, filtered by bus", async () => {
-    await request(app).get("/api/v1/trips").expect(200);
-    const { bus } = await fleet(await devOperatorId(), 48, -30, 24);
+    const { bus } = await fleet(ids.operatorId, 48, -30, 24);
 
-    const res = await request(app).get(`/api/v1/trips?busId=${bus.id}`).expect(200);
+    const res = await owner().get(`/api/v1/trips?busId=${bus.id}`).expect(200);
     expect(res.body.total).toBe(2);
     expect(new Date(res.body.items[0].departureAt) < new Date(res.body.items[1].departureAt)).toBe(true);
     expect(res.body.items[0]).toMatchObject({
@@ -87,30 +74,30 @@ describe("trips", () => {
       route: { origin: "Hyderabad", destination: "Bengaluru" },
       conductor: null,
     });
-    const none = await request(app).get("/api/v1/trips?busId=00000000-0000-4000-8000-000000000000").expect(200);
+    const none = await owner().get("/api/v1/trips?busId=00000000-0000-4000-8000-000000000000").expect(200);
     expect(none.body.total).toBe(0);
   });
 });
 
 describe("conductors API", () => {
   it("creates with name, mobile and password; hashes the password; blocks a duplicate mobile", async () => {
-    const res = await request(app).post("/api/v1/conductors").send(conductor).expect(201);
+    const res = await owner().post("/api/v1/conductors").send(conductor).expect(201);
     expect(res.body).toMatchObject({ name: "Suresh Conductor", phone: "9111111111", isActive: true, trip: null });
     expect(JSON.stringify(res.body)).not.toMatch(/password/i);
     const row = await prisma.conductor.findUniqueOrThrow({ where: { id: res.body.id } });
     expect(await bcrypt.compare(conductor.password, row.passwordHash)).toBe(true);
 
-    await request(app).post("/api/v1/conductors").send({ ...conductor, name: "Twin" }).expect(409);
-    await request(app).post("/api/v1/conductors").send({ ...conductor, phone: "123" }).expect(400);
+    await owner().post("/api/v1/conductors").send({ ...conductor, name: "Twin" }).expect(409);
+    await owner().post("/api/v1/conductors").send({ ...conductor, phone: "123" }).expect(400);
   });
 
   it("assigns a trip, moves to another trip, and clears it", async () => {
-    const { body } = await request(app).post("/api/v1/conductors").send(conductor).expect(201);
-    const { trips } = await fleet(await devOperatorId(), 24, 48);
+    const { body } = await owner().post("/api/v1/conductors").send(conductor).expect(201);
+    const { trips } = await fleet(ids.operatorId, 24, 48);
     const [first, second] = [trips[0]!, trips[1]!];
     const url = `/api/v1/conductors/${body.id}`;
 
-    const assigned = await request(app).patch(url).send({ tripId: first.id }).expect(200);
+    const assigned = await owner().patch(url).send({ tripId: first.id }).expect(200);
     expect(assigned.body.trip).toMatchObject({
       id: first.id,
       bus: { registrationNo: "TS 09 AB 1234" },
@@ -118,48 +105,48 @@ describe("conductors API", () => {
     });
     expect(assigned.body.trip.departureAt).toBe(first.departureAt.toISOString());
 
-    const moved = await request(app).patch(url).send({ tripId: second.id }).expect(200);
+    const moved = await owner().patch(url).send({ tripId: second.id }).expect(200);
     expect(moved.body.trip.id).toBe(second.id);
     expect((await prisma.trip.findUniqueOrThrow({ where: { id: first.id } })).conductorId).toBeNull();
 
     // Editing other fields leaves the assignment alone.
-    const renamed = await request(app).patch(url).send({ name: "Suresh K" }).expect(200);
+    const renamed = await owner().patch(url).send({ name: "Suresh K" }).expect(200);
     expect(renamed.body.trip.id).toBe(second.id);
 
-    const cleared = await request(app).patch(url).send({ tripId: null }).expect(200);
+    const cleared = await owner().patch(url).send({ tripId: null }).expect(200);
     expect(cleared.body.trip).toBeNull();
   });
 
   it("refuses a trip that already has another conductor, a past trip, and another operator's trip", async () => {
-    const a = await request(app).post("/api/v1/conductors").send(conductor).expect(201);
-    const b = await request(app).post("/api/v1/conductors").send({ ...conductor, phone: "9333333333" }).expect(201);
-    const { trips } = await fleet(await devOperatorId(), 24, -30);
+    const a = await owner().post("/api/v1/conductors").send(conductor).expect(201);
+    const b = await owner().post("/api/v1/conductors").send({ ...conductor, phone: "9333333333" }).expect(201);
+    const { trips } = await fleet(ids.operatorId, 24, -30);
     const [upcoming, past] = [trips[0]!, trips[1]!];
 
-    await request(app).patch(`/api/v1/conductors/${a.body.id}`).send({ tripId: upcoming.id }).expect(200);
-    const taken = await request(app).patch(`/api/v1/conductors/${b.body.id}`).send({ tripId: upcoming.id }).expect(409);
+    await owner().patch(`/api/v1/conductors/${a.body.id}`).send({ tripId: upcoming.id }).expect(200);
+    const taken = await owner().patch(`/api/v1/conductors/${b.body.id}`).send({ tripId: upcoming.id }).expect(409);
     expect(taken.body.error.message).toContain("Suresh Conductor");
-    await request(app).patch(`/api/v1/conductors/${b.body.id}`).send({ tripId: past.id }).expect(400);
+    await owner().patch(`/api/v1/conductors/${b.body.id}`).send({ tripId: past.id }).expect(400);
 
     const other = await prisma.operator.create({ data: { name: "Other Travels" } });
     const foreign = await fleet(other.id, 24);
-    const res = await request(app).patch(`/api/v1/conductors/${b.body.id}`).send({ tripId: foreign.trips[0]!.id }).expect(400);
+    const res = await owner().patch(`/api/v1/conductors/${b.body.id}`).send({ tripId: foreign.trips[0]!.id }).expect(400);
     expect(res.body.error.details).toHaveProperty("tripId");
-    expect((await request(app).get("/api/v1/trips").expect(200)).body.total).toBe(1);
+    expect((await owner().get("/api/v1/trips").expect(200)).body.total).toBe(1);
   });
 
   it("deleting a conductor frees their upcoming trip; another operator's conductor is untouchable", async () => {
-    const { body } = await request(app).post("/api/v1/conductors").send(conductor).expect(201);
-    const { trips } = await fleet(await devOperatorId(), 24);
-    await request(app).patch(`/api/v1/conductors/${body.id}`).send({ tripId: trips[0]!.id }).expect(200);
-    await request(app).delete(`/api/v1/conductors/${body.id}`).expect(204);
+    const { body } = await owner().post("/api/v1/conductors").send(conductor).expect(201);
+    const { trips } = await fleet(ids.operatorId, 24);
+    await owner().patch(`/api/v1/conductors/${body.id}`).send({ tripId: trips[0]!.id }).expect(200);
+    await owner().delete(`/api/v1/conductors/${body.id}`).expect(204);
     expect((await prisma.trip.findUniqueOrThrow({ where: { id: trips[0]!.id } })).conductorId).toBeNull();
 
     const other = await prisma.operator.create({ data: { name: "Other Travels" } });
     const theirs = await prisma.conductor.create({
       data: { operatorId: other.id, name: "Foreign", phone: "9222222222", passwordHash: "x" },
     });
-    await request(app).patch(`/api/v1/conductors/${theirs.id}`).send({ name: "Hacked" }).expect(404);
-    await request(app).delete(`/api/v1/conductors/${theirs.id}`).expect(404);
+    await owner().patch(`/api/v1/conductors/${theirs.id}`).send({ name: "Hacked" }).expect(404);
+    await owner().delete(`/api/v1/conductors/${theirs.id}`).expect(404);
   });
 });
