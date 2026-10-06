@@ -11,6 +11,7 @@ import { busesRouter } from "./modules/buses/routes";
 import { conductorAppRouter } from "./modules/conductor-app/routes";
 import { conductorsRouter } from "./modules/conductors/routes";
 import { driversRouter } from "./modules/drivers/routes";
+import { reportsRouter } from "./modules/reports/routes";
 import { routesRouter } from "./modules/routes/routes";
 import { schedulesRouter } from "./modules/schedules/routes";
 import { tripsRouter } from "./modules/trips/routes";
@@ -37,6 +38,7 @@ api.use("/routes", owner, routesRouter);
 api.use("/trips", owner, tripsRouter);
 api.use("/schedules", owner, schedulesRouter);
 api.use("/bookings", owner, ownerBookingsRouter);
+api.use("/reports", owner, reportsRouter);
 
 // The agent's booking desk.
 api.use("/booking", requireAuth, requireRole("AGENT"), bookingRouter);
