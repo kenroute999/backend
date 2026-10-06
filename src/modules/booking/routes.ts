@@ -131,14 +131,17 @@ bookingRouter.get("/bookings", async (req, res) => {
         },
       },
       passenger: { select: { name: true, age: true, gender: true, phoneEnc: true } },
+      commission: { select: { amount: true, status: true } },
     },
     orderBy: { createdAt: "desc" },
     take: 200,
   });
 
-  const items = rows.map(({ tripSeat, passenger, ...b }) => ({
+  const items = rows.map(({ tripSeat, passenger, commission, ...b }) => ({
     ...b,
     seatNumber: tripSeat.seatNumber,
+    // What the agent earns on this ticket; nothing once the ticket is cancelled.
+    commission: commission && commission.status !== "VOID" ? commission.amount.toFixed(2) : "0.00",
     // The agent typed this number in, so they may see it again.
     passenger: passenger && {
       name: passenger.name,

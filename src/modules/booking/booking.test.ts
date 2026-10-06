@@ -202,6 +202,7 @@ describe("booking seats", () => {
     expect(mine.body.items[0]).toMatchObject({
       status: "CONFIRMED",
       source: "AGENT",
+      commission: expect.stringMatching(/^[1-9]\d*\.\d{2}$/),
       fare: "1200",
       seatNumber: "L1",
       boardingPoint: "Ameerpet",
