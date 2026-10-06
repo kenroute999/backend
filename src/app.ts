@@ -5,6 +5,7 @@ import { config } from "./core/config";
 import { errorHandler, notFound } from "./core/errors";
 import { agentsRouter } from "./modules/agents/routes";
 import { authRouter, me } from "./modules/auth/routes";
+import { bookingRouter } from "./modules/booking/routes";
 import { busesRouter } from "./modules/buses/routes";
 import { conductorAppRouter } from "./modules/conductor-app/routes";
 import { conductorsRouter } from "./modules/conductors/routes";
@@ -32,6 +33,9 @@ api.use("/conductors", owner, conductorsRouter);
 api.use("/buses", owner, busesRouter);
 api.use("/routes", owner, routesRouter);
 api.use("/trips", owner, tripsRouter);
+
+// The agent's booking desk.
+api.use("/booking", requireAuth, requireRole("AGENT"), bookingRouter);
 
 // The conductor's phone app.
 api.use("/conductor", requireAuth, requireRole("CONDUCTOR"), conductorAppRouter);

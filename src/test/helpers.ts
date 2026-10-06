@@ -11,6 +11,7 @@ export const OWNER_PASSWORD = "Owner@123";
 /** Empties every table the tests write to, children first. */
 export async function cleanDb() {
   await prisma.refreshToken.deleteMany();
+  await prisma.commissionLedger.deleteMany();
   await prisma.passenger.deleteMany();
   await prisma.booking.deleteMany();
   await prisma.channel.deleteMany();

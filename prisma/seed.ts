@@ -30,6 +30,15 @@ const buses = [
   { registrationNo: "TS 09 IJ 3344", name: "KenRoute Deluxe", seating: "SEATER", isAc: true, seats: 40, status: "INACTIVE" },
 ] as const;
 
+const stops: Record<string, string[]> = {
+  Hyderabad: ["Ameerpet", "LB Nagar", "Kukatpally", "Miyapur"],
+  Bangalore: ["Majestic", "Silk Board", "Marathahalli"],
+  Vijayawada: ["Benz Circle", "PNBS Bus Stand"],
+  Chennai: ["Koyambedu", "Guindy"],
+  Visakhapatnam: ["MVP Colony", "Maddilapalem"],
+  Tirupati: ["RTC Bus Stand", "Alipiri"],
+};
+
 const routes = [
   { origin: "Hyderabad", destination: "Bangalore", baseFare: 1200 },
   { origin: "Hyderabad", destination: "Vijayawada", baseFare: 850 },
@@ -37,7 +46,7 @@ const routes = [
   { origin: "Hyderabad", destination: "Chennai", baseFare: 1000 },
   { origin: "Visakhapatnam", destination: "Hyderabad", baseFare: 950 },
   { origin: "Hyderabad", destination: "Tirupati", baseFare: 900 },
-];
+].map((r) => ({ ...r, boardingPoints: stops[r.origin] ?? [], droppingPoints: stops[r.destination] ?? [] }));
 
 // Daily departures for the next week, matching the times on the Admin Routes screen. Times are IST.
 const DAYS_AHEAD = 7;
@@ -101,8 +110,15 @@ async function main() {
     await prisma.bus.create({ data: { ...b, operatorId, seatLayoutId: layout.id } });
   }
   for (const r of routes) {
-    if (await prisma.route.findFirst({ where: { operatorId, origin: r.origin, destination: r.destination } })) continue;
-    await prisma.route.create({ data: { ...r, operatorId } });
+    const existing = await prisma.route.findFirst({ where: { operatorId, origin: r.origin, destination: r.destination } });
+    if (!existing) await prisma.route.create({ data: { ...r, operatorId } });
+    // Routes seeded before stops existed get them now; stops the owner has entered are left alone.
+    else if (existing.boardingPoints.length === 0 && existing.droppingPoints.length === 0) {
+      await prisma.route.update({
+        where: { id: existing.id },
+        data: { boardingPoints: r.boardingPoints, droppingPoints: r.droppingPoints },
+      });
+    }
   }
 
   for (const s of schedule) {
