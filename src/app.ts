@@ -6,6 +6,7 @@ import { errorHandler, notFound } from "./core/errors";
 import { agentsRouter } from "./modules/agents/routes";
 import { authRouter, me } from "./modules/auth/routes";
 import { busesRouter } from "./modules/buses/routes";
+import { conductorAppRouter } from "./modules/conductor-app/routes";
 import { conductorsRouter } from "./modules/conductors/routes";
 import { driversRouter } from "./modules/drivers/routes";
 import { routesRouter } from "./modules/routes/routes";
@@ -31,6 +32,9 @@ api.use("/conductors", owner, conductorsRouter);
 api.use("/buses", owner, busesRouter);
 api.use("/routes", owner, routesRouter);
 api.use("/trips", owner, tripsRouter);
+
+// The conductor's phone app.
+api.use("/conductor", requireAuth, requireRole("CONDUCTOR"), conductorAppRouter);
 
 app.use("/api/v1", api);
 app.use(notFound);
