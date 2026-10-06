@@ -168,6 +168,43 @@ describe("booking seats", () => {
     expect((await as("AGENT", b.id, ids.operatorId).get("/api/v1/booking/bookings").expect(200)).body.total).toBe(0);
   });
 
+  it("cancels a ticket: seat back on sale, commission voided, and it can be sold again", async () => {
+    const a = await addAgent(ids.operatorId, "anil@example.com");
+    const b = await addAgent(ids.operatorId, "babu@example.com");
+    const { trip, seats } = await tripIn(ids.operatorId, 30);
+    const me = as("AGENT", a.id, ids.operatorId);
+    const made = await me.post("/api/v1/booking/bookings").send(order(trip.id, [person(seats[0]!.id)])).expect(201);
+    const bookingId = made.body.bookings[0].id;
+
+    // Another agent cannot cancel it.
+    await as("AGENT", b.id, ids.operatorId).post(`/api/v1/booking/bookings/${bookingId}/cancel`).expect(404);
+
+    const res = await me.post(`/api/v1/booking/bookings/${bookingId}/cancel`).expect(200);
+    expect(res.body.status).toBe("CANCELLED");
+    expect((await prisma.tripSeat.findUniqueOrThrow({ where: { id: seats[0]!.id } })).status).toBe("AVAILABLE");
+    expect((await prisma.commissionLedger.findUniqueOrThrow({ where: { bookingId } })).status).toBe("VOID");
+    await me.post(`/api/v1/booking/bookings/${bookingId}/cancel`).expect(409);
+
+    // The freed seat sells again, alongside the cancelled booking.
+    await as("AGENT", b.id, ids.operatorId).post("/api/v1/booking/bookings").send(order(trip.id, [person(seats[0]!.id)])).expect(201);
+    expect(await prisma.booking.count({ where: { tripSeatId: seats[0]!.id } })).toBe(2);
+  });
+
+  it("will not cancel after the bus has left or once the passenger has boarded", async () => {
+    const a = await addAgent(ids.operatorId, "anil@example.com");
+    const { trip, seats } = await tripIn(ids.operatorId, 30);
+    const me = as("AGENT", a.id, ids.operatorId);
+    const made = await me.post("/api/v1/booking/bookings").send(order(trip.id, [person(seats[0]!.id), person(seats[1]!.id)])).expect(201);
+    const [first, second] = made.body.bookings;
+
+    await prisma.booking.update({ where: { id: first.id }, data: { status: "BOARDED" } });
+    await me.post(`/api/v1/booking/bookings/${first.id}/cancel`).expect(409);
+
+    await prisma.trip.update({ where: { id: trip.id }, data: { departureAt: new Date(Date.now() - HOUR) } });
+    await me.post(`/api/v1/booking/bookings/${second.id}/cancel`).expect(409);
+    expect((await prisma.booking.findUniqueOrThrow({ where: { id: second.id } })).status).toBe("CONFIRMED");
+  });
+
   it("refuses a seat that is already booked and leaves nothing half-done", async () => {
     const agent = await addAgent(ids.operatorId, "anil@example.com");
     const { trip, seats } = await tripIn(ids.operatorId, 30);
