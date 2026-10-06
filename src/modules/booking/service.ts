@@ -9,7 +9,9 @@ export const ID_PROOF_TYPES = ["AADHAAR", "PAN", "DRIVING_LICENCE", "VOTER_ID", 
 
 const passenger = z.strictObject({
   seatId: z.uuid(),
-  name: personName,
+  // Letters (any script), spaces, dots, apostrophes and hyphens only: this text is later
+  // printed on tickets and exported to spreadsheets.
+  name: personName.regex(/^\p{L}[\p{L}\p{M} .'-]*$/u, "Use letters only"),
   age: z.number().int().min(1).max(120),
   gender: z.enum(["MALE", "FEMALE", "OTHER"]),
   phone: mobile,

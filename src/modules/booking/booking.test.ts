@@ -284,11 +284,12 @@ describe("booking seats", () => {
 
     const bad = await me
       .post("/api/v1/booking/bookings")
-      .send(order(trip.id, [person(seats[0]!.id, { phone: "12345", age: 0, idProofNumber: "x" })]))
+      .send(order(trip.id, [person(seats[0]!.id, { name: "=HYPERLINK(1)", phone: "12345", age: 0, idProofNumber: "x" })]))
       .expect(400);
     expect(Object.keys(bad.body.error.details).sort()).toEqual([
       "passengers.0.age",
       "passengers.0.idProofNumber",
+      "passengers.0.name",
       "passengers.0.phone",
     ]);
 
