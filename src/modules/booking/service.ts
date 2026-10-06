@@ -40,6 +40,48 @@ export const bookingInput = z
 
 export type BookingInput = z.infer<typeof bookingInput>;
 
+type Gender = "MALE" | "FEMALE";
+interface Placed {
+  id: string;
+  deck: string;
+  row: number;
+  col: number;
+}
+
+/**
+ * Seats that sit side by side (the two berths of a double bed, or two seats next to
+ * each other) share a pair key. A seat on its own has none.
+ *   2+2 buses: columns 0,1 are one pair and 3,4 the other;
+ *   2+1 buses: columns 2,3 are the pair, column 0 stands alone.
+ * ponytail: the middle seat of a back bench counts as standing alone.
+ */
+function pairKey(seat: Placed, seating: string): string | null {
+  const side = seating === "SEATER" ? (seat.col <= 1 ? "L" : seat.col >= 3 ? "R" : null) : seat.col >= 2 ? "P" : null;
+  return side && `${seat.deck}:${seat.row}:${side}`;
+}
+
+/**
+ * The seat beside a man or a woman travelling with a stranger is kept for the same
+ * gender. Returns, for each free seat held this way, the gender it is held for.
+ */
+export function heldForGender(
+  seats: (Placed & { status: string; gender?: string | null | undefined })[],
+  seating: string,
+): Map<string, Gender> {
+  const occupant = new Map<string, Gender>();
+  for (const s of seats) {
+    const key = pairKey(s, seating);
+    if (key && s.status === "BOOKED" && (s.gender === "MALE" || s.gender === "FEMALE")) occupant.set(key, s.gender);
+  }
+  const held = new Map<string, Gender>();
+  for (const s of seats) {
+    const key = pairKey(s, seating);
+    const gender = key && occupant.get(key);
+    if (gender && s.status === "AVAILABLE") held.set(s.id, gender);
+  }
+  return held;
+}
+
 // No 0/O or 1/I, so a code read out over the phone cannot be misheard.
 const PNR_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 function newPnr(): string {
@@ -47,21 +89,22 @@ function newPnr(): string {
 }
 
 /**
- * The only way an agent booking is created. Seats, bookings, passengers and
- * commission are written together or not at all.
+ * The only way a booking is created. Seats, bookings, passengers and commission
+ * are written together or not at all. An agent's booking earns that agent a
+ * commission; the owner books with no `agentId` and no commission.
  */
-export async function createBooking(ctx: { operatorId: string; agentId: string }, input: BookingInput) {
+export async function createBooking(ctx: { operatorId: string; agentId?: string }, input: BookingInput) {
   const { operatorId, agentId } = ctx;
 
   const [trip, agent] = await Promise.all([
     prisma.trip.findFirst({
       where: { id: input.tripId, operatorId, status: "SCHEDULED", departureAt: { gt: new Date() } },
-      include: { route: true, bus: { select: { registrationNo: true, name: true } } },
+      include: { route: true, bus: { select: { registrationNo: true, name: true, seating: true } } },
     }),
-    prisma.agent.findFirst({ where: { id: agentId, operatorId, isActive: true } }),
+    agentId ? prisma.agent.findFirst({ where: { id: agentId, operatorId, isActive: true } }) : null,
   ]);
   if (!trip) throw new AppError(404, "NOT_FOUND", "This trip is no longer open for booking");
-  if (!agent) throw new AppError(403, "FORBIDDEN", "This agent account cannot book");
+  if (agentId && !agent) throw new AppError(403, "FORBIDDEN", "This agent account cannot book");
 
   const stops = (field: "boardingPoint" | "droppingPoint", allowed: string[]) => {
     if (allowed.length > 0 && !allowed.includes(input[field])) {
@@ -86,6 +129,37 @@ export async function createBooking(ctx: { operatorId: string; agentId: string }
       throw new AppError(409, "SEAT_UNAVAILABLE", "One or more of these seats was just taken. Please choose again.");
     }
 
+    // A seat beside someone already booked goes only to a passenger of the same gender.
+    // People booked together in this order may sit together whatever their gender.
+    // ponytail: two different orders taking the two halves of a pair in the same instant
+    // can both pass; lock the trip's seats (SELECT ... FOR UPDATE) if that ever shows up.
+    const placed = await tx.tripSeat.findMany({
+      where: { tripId: trip.id },
+      select: {
+        id: true,
+        seatNumber: true,
+        deck: true,
+        row: true,
+        col: true,
+        bookings: {
+          where: { status: { in: ["CONFIRMED", "BOARDED", "COMPLETED"] } },
+          select: { passenger: { select: { gender: true } } },
+          take: 1,
+        },
+      },
+    });
+    const others = placed
+      .filter((s) => !seatIds.includes(s.id))
+      .map((s) => ({ ...s, status: s.bookings[0] ? "BOOKED" : "TAKEN", gender: s.bookings[0]?.passenger?.gender }));
+    for (const p of input.passengers) {
+      const seat = placed.find((s) => s.id === p.seatId)!;
+      const held = heldForGender([...others, { ...seat, status: "AVAILABLE" }], trip.bus.seating).get(seat.id);
+      if (held && p.gender !== held) {
+        const who = held === "FEMALE" ? "female" : "male";
+        throw new AppError(409, "SEAT_GENDER", `Seat ${seat.seatNumber} is beside a ${who} passenger, so only a ${who} passenger can take it`);
+      }
+    }
+
     const channel =
       (await tx.channel.findFirst({ where: { operatorId, type: "OWN_AGENT" } })) ??
       (await tx.channel.create({ data: { operatorId, type: "OWN_AGENT", status: "CONNECTED" } }));
@@ -101,14 +175,14 @@ export async function createBooking(ctx: { operatorId: string; agentId: string }
     const created = [];
     for (const p of input.passengers) {
       const fare = fareBySeat.get(p.seatId) ?? trip.fare;
-      const commission = fare.mul(agent.commissionPct).div(100).toDecimalPlaces(2);
+      const commission = agent && fare.mul(agent.commissionPct).div(100).toDecimalPlaces(2);
       const booking = await tx.booking.create({
         data: {
           operatorId,
           tripId: trip.id,
           tripSeatId: p.seatId,
           channelId: channel.id,
-          agentId,
+          ...(agent && { agentId: agent.id }),
           source: input.source,
           pnr,
           fare,
@@ -129,7 +203,7 @@ export async function createBooking(ctx: { operatorId: string; agentId: string }
               idProofEnc: encrypt(p.idProofNumber),
             },
           },
-          commission: { create: { operatorId, agentId, amount: commission } },
+          ...(agent && commission && { commission: { create: { operatorId, agentId: agent.id, amount: commission } } }),
         },
         select: {
           id: true,

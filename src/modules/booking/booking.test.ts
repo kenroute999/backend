@@ -79,6 +79,51 @@ beforeEach(async () => {
   ids = await seedOwner();
 });
 
+describe("seats side by side", () => {
+  // The seeded test bus may not have a pair, so this one is built on the Sleeper (2+1) plan.
+  it("keeps the berth beside a passenger for the same gender, shows it, and lets the owner book", async () => {
+    const o = await seedOwner("Pair Travels", "owner@pair.example.com");
+    const boss = as("OWNER", o.userId, o.operatorId);
+    const bus = await boss.post("/api/v1/buses").send({ registrationNo: "TS 01 PA 0001", name: "Pair", seating: "SLEEPER", isAc: true }).expect(201);
+    const trip = await boss
+      .post("/api/v1/schedules")
+      .send({
+        origin: "Hyderabad",
+        destination: "Pune",
+        busId: bus.body.id,
+        departureAt: new Date(Date.now() + 86_400_000).toISOString(),
+        arrivalAt: new Date(Date.now() + 2 * 86_400_000).toISOString(),
+        fares: { singleBed: 1400, doubleBed: 950 },
+      })
+      .expect(201);
+    const seat = async (n: string) => (await prisma.tripSeat.findFirstOrThrow({ where: { tripId: trip.body.id, seatNumber: n } })).id;
+    // L7 and L8 are the two berths of the first double bed; L9 and L10 the second; L1 is a single.
+    const [l1, l7, l8, l9, l10] = (await Promise.all(["L1", "L7", "L8", "L9", "L10"].map(seat))) as [string, string, string, string, string];
+    const person = (seatId: string, gender: string) => ({ seatId, name: "Asha Rao", age: 30, gender, phone: "9876543210", idProofType: "AADHAAR", idProofNumber: "123456789012" });
+    const order = (passengers: unknown[]) => ({ tripId: trip.body.id, source: "COUNTER", boardingPoint: "Ameerpet", droppingPoint: "Swargate", paymentMode: "CASH", passengers });
+    const book = (passengers: unknown[]) => boss.post("/api/v1/bookings").send(order(passengers));
+
+    // The owner books a woman into L7: no agent, no commission.
+    const first = await book([person(l7, "FEMALE")]).expect(201);
+    expect(first.body).toMatchObject({ totalFare: "950.00", commission: "0.00" });
+    const saved = await prisma.booking.findFirstOrThrow({ where: { pnr: first.body.pnr }, include: { commission: true } });
+    expect(saved).toMatchObject({ agentId: null, commission: null, source: "COUNTER" });
+
+    // L8 is now held for a woman: shown to owner and agent, refused to a man, open to a woman.
+    const seats = (await boss.get(`/api/v1/schedules/${trip.body.id}/seats`).expect(200)).body.seats;
+    const held = Object.fromEntries(seats.filter((s: { reservedFor: string | null }) => s.reservedFor).map((s: { seatNumber: string; reservedFor: string }) => [s.seatNumber, s.reservedFor]));
+    expect(held).toEqual({ L8: "FEMALE" });
+    const refused = await book([person(l8, "MALE")]).expect(409);
+    expect(refused.body.error.code).toBe("SEAT_GENDER");
+    expect((await prisma.tripSeat.findUniqueOrThrow({ where: { id: l8 } })).status).toBe("AVAILABLE");
+    await book([person(l8, "FEMALE")]).expect(201);
+
+    // A single berth has no neighbour, and a couple booked together may share a double bed.
+    await book([person(l1, "MALE")]).expect(201);
+    await book([person(l9, "MALE"), person(l10, "FEMALE")]).expect(201);
+  });
+});
+
 afterAll(() => prisma.$disconnect());
 
 describe("finding a bus", () => {

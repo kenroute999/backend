@@ -4,7 +4,7 @@ import { idParam } from "../../core/accounts";
 import { decrypt } from "../../core/crypto";
 import { prisma } from "../../core/db";
 import { AppError } from "../../core/errors";
-import { bookingInput, cancelBooking, createBooking } from "./service";
+import { bookingInput, cancelBooking, createBooking, heldForGender } from "./service";
 
 // The agent's booking desk: routes the owner created, trips on a date, seats, and the booking itself.
 export const bookingRouter = Router();
@@ -100,10 +100,10 @@ bookingRouter.get("/trips/:id/seats", async (req, res) => {
     orderBy: [{ deck: "asc" }, { row: "asc" }, { col: "asc" }],
   });
 
-  res.json({
-    trip,
-    seats: seats.map(({ bookings, ...s }) => ({ ...s, passengerGender: bookings[0]?.passenger?.gender ?? null })),
-  });
+  const flat = seats.map(({ bookings, ...s }) => ({ ...s, passengerGender: bookings[0]?.passenger?.gender ?? null }));
+  const held = heldForGender(flat.map((s) => ({ ...s, gender: s.passengerGender })), trip.bus.seating);
+  // `reservedFor`: a free seat beside a booked one is kept for a passenger of the same gender.
+  res.json({ trip, seats: flat.map((s) => ({ ...s, reservedFor: held.get(s.id) ?? null })) });
 });
 
 // The agent's own bookings, newest first. Agents never see another agent's bookings.

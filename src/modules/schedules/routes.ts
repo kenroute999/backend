@@ -3,6 +3,7 @@ import { z } from "zod";
 import { idParam } from "../../core/accounts";
 import { prisma } from "../../core/db";
 import { AppError } from "../../core/errors";
+import { heldForGender } from "../booking/service";
 import { assertBusFree, createTripWithSeats, fareFor, faresSchema, type Fares } from "../trips/service";
 
 // What the owner's Routes screen manages: a route, the bus running it, when, and at what fares.
@@ -233,7 +234,10 @@ schedulesRouter.delete("/:id", async (req, res) => {
 
 schedulesRouter.get("/:id/seats", async (req, res) => {
   const { id } = idParam.parse(req.params);
-  const trip = await prisma.trip.findFirst({ where: { id, operatorId: req.operatorId }, select: { id: true } });
+  const trip = await prisma.trip.findFirst({
+    where: { id, operatorId: req.operatorId },
+    select: { bus: { select: { seating: true } } },
+  });
   if (!trip) throw new AppError(404, "NOT_FOUND", "Trip not found");
 
   const seats = await prisma.tripSeat.findMany({
@@ -264,7 +268,13 @@ schedulesRouter.get("/:id/seats", async (req, res) => {
     },
     orderBy: [{ deck: "asc" }, { row: "asc" }, { col: "asc" }],
   });
-  res.json({ seats: seats.map(({ bookings, ...s }) => ({ ...s, booking: bookings[0] ?? null })) });
+  const held = heldForGender(
+    seats.map((s) => ({ ...s, gender: s.bookings[0]?.passenger?.gender })),
+    trip.bus.seating,
+  );
+  res.json({
+    seats: seats.map(({ bookings, ...s }) => ({ ...s, booking: bookings[0] ?? null, reservedFor: held.get(s.id) ?? null })),
+  });
 });
 
 // The owner keeps a seat off sale (blocked) or puts it back. A sold seat is not touched here.

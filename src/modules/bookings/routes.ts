@@ -2,7 +2,7 @@ import { Router } from "express";
 import { idParam } from "../../core/accounts";
 import { decrypt } from "../../core/crypto";
 import { prisma } from "../../core/db";
-import { cancelBooking } from "../booking/service";
+import { bookingInput, cancelBooking, createBooking } from "../booking/service";
 
 // The owner's view of every booking on every channel, by every agent.
 export const ownerBookingsRouter = Router();
@@ -55,6 +55,11 @@ ownerBookingsRouter.get("/", async (req, res) => {
     },
   }));
   res.json({ items, total: items.length });
+});
+
+// The owner books at the office counter: same rules as an agent, but no agent and no commission.
+ownerBookingsRouter.post("/", async (req, res) => {
+  res.status(201).json(await createBooking({ operatorId: req.operatorId }, bookingInput.parse(req.body)));
 });
 
 // The owner can cancel any ticket of their operator, under the same rules as an agent.
