@@ -8,3 +8,6 @@ node_modules
 /admin/
 /agent/
 /counductor/
+
+# Internal plans and notes: kept on the laptop, not in the repository
+/docs/

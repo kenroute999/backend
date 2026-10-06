@@ -85,7 +85,6 @@ prisma/           schema, migrations, seed
 src/core/         config, database client, auth, errors, shared validation
 src/modules/      one folder per feature: routes and tests
 src/test/         test setup and helpers
-docs/             plans, audits and task sheets
 ```
 
 The `admin/`, `agent/` and `counductor/` folders, if present next to this code, are separate repositories.
