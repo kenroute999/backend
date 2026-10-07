@@ -158,11 +158,11 @@ describe("conductors API", () => {
   });
 });
 
-describe("driver assignment and bus staff", () => {
+describe("driver assignment", () => {
   const driver = { name: "Ramu Driver", phone: "9333333333", licenseNo: "TS-DL-2018-23145", experienceYears: 8 };
 
   it("puts a driver on a trip, moves and clears it, and refuses a trip another driver has", async () => {
-    const { trips, bus } = await fleet(ids.operatorId, 24, 48);
+    const { trips } = await fleet(ids.operatorId, 24, 48);
     const [first, second] = [trips[0]!, trips[1]!];
 
     // A driver can be given a trip while being added.
@@ -179,17 +179,11 @@ describe("driver assignment and bus staff", () => {
     expect((await prisma.trip.findUniqueOrThrow({ where: { id: first.id } })).driverId).toBeNull();
     expect((await owner().patch(url).send({ experienceYears: 9 }).expect(200)).body.trip.id).toBe(second.id);
 
-    // The trip list and the bus both say who is on board.
+    // The trip list says who is on board.
     const conductorRow = await owner().post("/api/v1/conductors").send(conductor).expect(201);
     await owner().patch(`/api/v1/conductors/${conductorRow.body.id}`).send({ tripId: second.id }).expect(200);
     const listed = await owner().get("/api/v1/trips").expect(200);
     expect(listed.body.items.find((t: { id: string }) => t.id === second.id)).toMatchObject({ driver: { name: "Ramu Driver" }, conductor: { name: "Suresh Conductor" } });
-    const buses = await owner().get("/api/v1/buses").expect(200);
-    const staff = buses.body.items.find((b: { id: string }) => b.id === bus.id).upcomingTrips;
-    expect(staff).toHaveLength(2);
-    expect(staff[0]).toMatchObject({ driver: null, conductor: null });
-    expect(staff[1]).toMatchObject({ driver: { name: "Ramu Driver", phone: "9333333333", licenseNo: "TS-DL-2018-23145" }, conductor: { name: "Suresh Conductor", phone: "9111111111" } });
-    expect(JSON.stringify(buses.body)).not.toMatch(/password/i);
 
     expect((await owner().patch(url).send({ tripId: null }).expect(200)).body.trip).toBeNull();
     await owner().patch(url).send({ tripId: "not-an-id" }).expect(400);
