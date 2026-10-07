@@ -29,10 +29,35 @@ const busFields = {
   seatLayout: { select: { id: true, name: true, totalSeats: true } },
 } as const;
 
+// Who is on the bus for its next few trips: shown under "Staff" on the Buses page.
+function busSelect() {
+  return {
+    ...busFields,
+    trips: {
+      where: { status: "SCHEDULED" as const, departureAt: { gte: new Date() } },
+      orderBy: { departureAt: "asc" as const },
+      take: 5,
+      select: {
+        id: true,
+        departureAt: true,
+        route: { select: { origin: true, destination: true } },
+        driver: { select: { id: true, name: true, phone: true, licenseNo: true } },
+        conductor: { select: { id: true, name: true, phone: true } },
+      },
+    },
+  };
+}
+
 type Row = {
   seatLayout: { id: string; name: string; totalSeats: number };
+  trips?: unknown[];
 } & Record<string, unknown>;
-const present = ({ seatLayout, ...bus }: Row) => ({ ...bus, seats: seatLayout.totalSeats, seatLayout });
+const present = ({ seatLayout, trips, ...bus }: Row) => ({
+  ...bus,
+  seats: seatLayout.totalSeats,
+  seatLayout,
+  upcomingTrips: trips ?? [],
+});
 
 const hasUpcomingTrips = (busId: string) =>
   prisma.trip.findFirst({
@@ -47,7 +72,7 @@ export const busesRouter = Router();
 busesRouter.get("/", async (req, res) => {
   const rows = await prisma.bus.findMany({
     where: { operatorId: req.operatorId },
-    select: busFields,
+    select: busSelect(),
     orderBy: { registrationNo: "asc" },
   });
   res.json({ items: rows.map(present), total: rows.length });

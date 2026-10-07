@@ -157,3 +157,54 @@ describe("conductors API", () => {
     await owner().delete(`/api/v1/conductors/${theirs.id}`).expect(404);
   });
 });
+
+describe("driver assignment and bus staff", () => {
+  const driver = { name: "Ramu Driver", phone: "9333333333", licenseNo: "TS-DL-2018-23145", experienceYears: 8 };
+
+  it("puts a driver on a trip, moves and clears it, and refuses a trip another driver has", async () => {
+    const { trips, bus } = await fleet(ids.operatorId, 24, 48);
+    const [first, second] = [trips[0]!, trips[1]!];
+
+    // A driver can be given a trip while being added.
+    const made = await owner().post("/api/v1/drivers").send({ ...driver, tripId: first.id }).expect(201);
+    expect(made.body.trip).toMatchObject({ id: first.id, bus: { registrationNo: "TS 09 AB 1234" }, route: { origin: "Hyderabad" } });
+    const url = `/api/v1/drivers/${made.body.id}`;
+
+    const other = await owner().post("/api/v1/drivers").send({ ...driver, name: "Other Driver", licenseNo: "TS-DL-0000-1", phone: "9444444444" }).expect(201);
+    const clash = await owner().patch(`/api/v1/drivers/${other.body.id}`).send({ tripId: first.id }).expect(409);
+    expect(clash.body.error.message).toBe("This trip is already assigned to Ramu Driver");
+
+    const moved = await owner().patch(url).send({ tripId: second.id }).expect(200);
+    expect(moved.body.trip.id).toBe(second.id);
+    expect((await prisma.trip.findUniqueOrThrow({ where: { id: first.id } })).driverId).toBeNull();
+    expect((await owner().patch(url).send({ experienceYears: 9 }).expect(200)).body.trip.id).toBe(second.id);
+
+    // The trip list and the bus both say who is on board.
+    const conductorRow = await owner().post("/api/v1/conductors").send(conductor).expect(201);
+    await owner().patch(`/api/v1/conductors/${conductorRow.body.id}`).send({ tripId: second.id }).expect(200);
+    const listed = await owner().get("/api/v1/trips").expect(200);
+    expect(listed.body.items.find((t: { id: string }) => t.id === second.id)).toMatchObject({ driver: { name: "Ramu Driver" }, conductor: { name: "Suresh Conductor" } });
+    const buses = await owner().get("/api/v1/buses").expect(200);
+    const staff = buses.body.items.find((b: { id: string }) => b.id === bus.id).upcomingTrips;
+    expect(staff).toHaveLength(2);
+    expect(staff[0]).toMatchObject({ driver: null, conductor: null });
+    expect(staff[1]).toMatchObject({ driver: { name: "Ramu Driver", phone: "9333333333", licenseNo: "TS-DL-2018-23145" }, conductor: { name: "Suresh Conductor", phone: "9111111111" } });
+    expect(JSON.stringify(buses.body)).not.toMatch(/password/i);
+
+    expect((await owner().patch(url).send({ tripId: null }).expect(200)).body.trip).toBeNull();
+    await owner().patch(url).send({ tripId: "not-an-id" }).expect(400);
+
+    // Deleting a driver frees their upcoming trip.
+    await owner().patch(url).send({ tripId: first.id }).expect(200);
+    await owner().delete(url).expect(204);
+    expect((await prisma.trip.findUniqueOrThrow({ where: { id: first.id } })).driverId).toBeNull();
+  });
+
+  it("refuses another operator's trip", async () => {
+    const other = await seedOwner("Other Travels", "other@example.com");
+    const theirs = await fleet(other.operatorId, 24);
+    const made = await owner().post("/api/v1/drivers").send(driver).expect(201);
+    await owner().patch(`/api/v1/drivers/${made.body.id}`).send({ tripId: theirs.trips[0]!.id }).expect(400);
+    await owner().post("/api/v1/drivers").send({ ...driver, licenseNo: "TS-DL-0000-2", tripId: theirs.trips[0]!.id }).expect(400);
+  });
+});

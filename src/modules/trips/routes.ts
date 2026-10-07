@@ -7,7 +7,7 @@ const listSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
 
-// Read-only for now: upcoming trips, used to assign conductors. Scheduling comes with the Trips screen.
+// Read-only: upcoming trips, used to assign conductors and drivers.
 export const tripsRouter = Router();
 
 tripsRouter.get("/", async (req, res) => {
@@ -26,6 +26,7 @@ tripsRouter.get("/", async (req, res) => {
       bus: { select: { id: true, registrationNo: true, name: true } },
       route: { select: { id: true, origin: true, destination: true } },
       conductor: { select: { id: true, name: true } },
+      driver: { select: { id: true, name: true } },
     },
     orderBy: { departureAt: "asc" },
     take: q.limit,
