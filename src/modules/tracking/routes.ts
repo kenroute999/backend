@@ -5,14 +5,20 @@ import { z } from "zod";
 import { config } from "../../core/config";
 import { prisma } from "../../core/db";
 import { AppError } from "../../core/errors";
+import { distanceKm, findPlace } from "./places";
 
 // Live bus tracking. The conductor's phone reports where the bus is; a passenger who
 // knows the PNR on their ticket can watch it on a map. Nobody signs in here: a passenger
 // gets a short-lived link for one trip, and the phone a key that can only report one trip.
 
 const HOUR_MS = 3_600_000;
-/** Positions are taken, and shown, only around the journey: never the conductor's day off. */
+/**
+ * Positions are taken, and shown, only around the journey: never the conductor's day off.
+ * Tracking opens when the conductor starts the trip, or by itself an hour before departure.
+ */
 const OPENS_BEFORE_MS = HOUR_MS;
+/** A conductor may start the trip this long before departure, not earlier. */
+export const START_BEFORE_MS = 2 * HOUR_MS;
 const CLOSES_AFTER_MS = 6 * HOUR_MS;
 const LINK_TTL_S = 24 * 3600;
 
@@ -21,6 +27,7 @@ const tripFields = {
   operatorId: true,
   conductorId: true,
   status: true,
+  startedAt: true,
   departureAt: true,
   arrivalAt: true,
   bus: { select: { registrationNo: true, name: true } },
@@ -30,6 +37,7 @@ const tripFields = {
 type TrackedTrip = {
   id: string;
   status: string;
+  startedAt: Date | null;
   departureAt: Date;
   arrivalAt: Date;
   bus: { registrationNo: string; name: string | null };
@@ -41,7 +49,7 @@ function isLive(trip: TrackedTrip): boolean {
   return (
     trip.status !== "COMPLETED" &&
     trip.status !== "CANCELLED" &&
-    now >= trip.departureAt.getTime() - OPENS_BEFORE_MS &&
+    (trip.startedAt !== null || now >= trip.departureAt.getTime() - OPENS_BEFORE_MS) &&
     now <= trip.arrivalAt.getTime() + CLOSES_AFTER_MS
   );
 }
@@ -49,7 +57,7 @@ function isLive(trip: TrackedTrip): boolean {
 // ---------------------------------------------------------------- tokens
 
 // Signed with the server's key, but never accepted as a sign-in: they carry no account.
-const linkClaims = z.object({ kind: z.literal("track"), tripId: z.uuid() });
+const linkClaims = z.object({ kind: z.literal("track"), tripId: z.uuid(), bookingId: z.uuid().optional() });
 const keyClaims = z.object({ kind: z.literal("gps"), tripId: z.uuid(), conductorId: z.uuid() });
 
 const sign = (claims: object, expiresIn: number) =>
@@ -111,7 +119,39 @@ export async function saveFix(tripId: string, conductorId: string, body: unknown
   return { saved: true };
 }
 
-async function view(trip: TrackedTrip) {
+/**
+ * The passenger's own stop: where they board, or once on the bus, where they get down;
+ * with how far the bus is from it.
+ *
+ * ponytail: the time is straight-line distance plus 30% for roads, at the bus's current
+ * speed kept between 20 and 70 km/h. Good to a few minutes in town, rough on a highway.
+ * Use a road-routing service if passengers start relying on the minute.
+ */
+async function stopFor(trip: TrackedTrip, bookingId: string | undefined, bus: { latitude: number; longitude: number; speed: number | null } | null) {
+  if (!bookingId) return null;
+  const booking = await prisma.booking.findFirst({
+    where: { id: bookingId, tripId: trip.id },
+    select: { boardingPoint: true, droppingPoint: true, passenger: { select: { boarded: true } } },
+  });
+  if (!booking) return null;
+  const onBoard = booking.passenger?.boarded === true;
+  const name = onBoard ? booking.droppingPoint : booking.boardingPoint;
+  if (!name) return null;
+  const place = await findPlace(name, onBoard ? trip.route.destination : trip.route.origin);
+  if (!place) return null;
+
+  const km = bus ? distanceKm(bus, place) * 1.3 : null;
+  const kmh = Math.min(70, Math.max(20, (bus?.speed ?? 0) * 3.6 || 35));
+  return {
+    kind: onBoard ? ("DROPPING" as const) : ("BOARDING" as const),
+    name,
+    ...place,
+    distanceKm: km === null ? null : Math.round(km * 10) / 10,
+    etaMinutes: km === null ? null : Math.max(1, Math.round((km / kmh) * 60)),
+  };
+}
+
+async function view(trip: TrackedTrip, bookingId?: string) {
   const location = isLive(trip)
     ? await prisma.tripLocation.findFirst({
         where: { tripId: trip.id },
@@ -121,7 +161,7 @@ async function view(trip: TrackedTrip) {
     : null;
   return {
     trip: {
-      status: trip.status,
+      status: trip.status === "SCHEDULED" && trip.startedAt ? "IN_PROGRESS" : trip.status,
       origin: trip.route.origin,
       destination: trip.route.destination,
       departureAt: trip.departureAt,
@@ -129,6 +169,7 @@ async function view(trip: TrackedTrip) {
       bus: trip.bus,
     },
     location,
+    stop: await stopFor(trip, bookingId, location),
   };
 }
 
@@ -160,21 +201,21 @@ trackingRouter.post("/lookup", limitLookups, async (req, res) => {
   const booking = await prisma.booking.findFirst({
     where: { pnr, status: { in: ["CONFIRMED", "BOARDED", "COMPLETED"] } },
     orderBy: { createdAt: "desc" },
-    select: { trip: { select: tripFields } },
+    select: { id: true, trip: { select: tripFields } },
   });
   if (!booking) throw new AppError(404, "NOT_FOUND", "No ticket found for this PNR");
   res.json({
-    token: sign({ kind: "track", tripId: booking.trip.id }, LINK_TTL_S),
+    token: sign({ kind: "track", tripId: booking.trip.id, bookingId: booking.id }, LINK_TTL_S),
     expiresInSeconds: LINK_TTL_S,
-    ...(await view(booking.trip)),
+    ...(await view(booking.trip, booking.id)),
   });
 });
 
 trackingRouter.get("/location", async (req, res) => {
-  const { tripId } = bearer(req, linkClaims);
+  const { tripId, bookingId } = bearer(req, linkClaims);
   const trip = await prisma.trip.findUnique({ where: { id: tripId }, select: tripFields });
   if (!trip) throw new AppError(404, "NOT_FOUND", "Trip not found");
-  res.json(await view(trip));
+  res.json(await view(trip, bookingId));
 });
 
 // The phone's background GPS reports here with its trip key.

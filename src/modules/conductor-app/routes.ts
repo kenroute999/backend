@@ -4,7 +4,7 @@ import { idParam } from "../../core/accounts";
 import { decrypt } from "../../core/crypto";
 import { prisma } from "../../core/db";
 import { AppError } from "../../core/errors";
-import { gpsKeyFor, saveFix } from "../tracking/routes";
+import { gpsKeyFor, saveFix, START_BEFORE_MS } from "../tracking/routes";
 
 // Everything here is the signed-in conductor's own work: only trips assigned to them.
 export const conductorAppRouter = Router();
@@ -14,6 +14,7 @@ const tripFields = {
   departureAt: true,
   arrivalAt: true,
   status: true,
+  startedAt: true,
   updatedAt: true,
   bus: { select: { registrationNo: true, name: true } },
   route: { select: { origin: true, destination: true } },
@@ -109,6 +110,24 @@ conductorAppRouter.post("/sync", async (req, res) => {
     applied += count;
   }
   res.json({ received: events.length, applied });
+});
+
+// The conductor says the bus is setting off. Passengers then see it live on the map.
+// Pressing it twice does nothing more.
+conductorAppRouter.post("/trips/:id/start", async (req, res) => {
+  const { id } = idParam.parse(req.params);
+  const trip = await ownTrip(id, req.auth.userId, req.operatorId);
+  if (trip.status === "COMPLETED" || trip.status === "CANCELLED") {
+    throw new AppError(409, "CONFLICT", "This trip is already over");
+  }
+  if (trip.departureAt.getTime() - Date.now() > START_BEFORE_MS) {
+    throw new AppError(409, "TOO_EARLY", "You can start this trip from 2 hours before its departure time");
+  }
+  if (trip.startedAt) {
+    res.json(trip);
+    return;
+  }
+  res.json(await prisma.trip.update({ where: { id }, data: { startedAt: new Date() }, select: tripFields }));
 });
 
 // Where the bus is now, sent while the conductor has the app open.

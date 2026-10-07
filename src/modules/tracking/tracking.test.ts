@@ -30,7 +30,7 @@ async function journey(operatorId: string, inHours: number, pnr: string, phone =
     create: { operatorId, type: "OWN_AGENT", status: "CONNECTED" },
   });
   await prisma.booking.create({
-    data: { operatorId, tripId: trip.id, tripSeatId: seat.id, channelId: channel.id, source: "AGENT", pnr, fare: 1200 },
+    data: { operatorId, tripId: trip.id, tripSeatId: seat.id, channelId: channel.id, source: "AGENT", pnr, fare: 1200, boardingPoint: "Ameerpet", droppingPoint: "Majestic" },
   });
   return { conductor, trip, phone: as("CONDUCTOR", conductor.id, operatorId) };
 }
@@ -86,6 +86,59 @@ describe("live bus tracking", () => {
     // Another conductor cannot report for this trip.
     await phone.post(url).send(fix).expect(404);
     await phone.post(`/api/v1/conductor/trips/${soon.trip.id}/gps-key`).expect(404);
+  });
+
+  it("starting the trip opens tracking early, but not days ahead", async () => {
+    // Leaves in 90 minutes: too early for tracking by the clock, but the conductor may start it.
+    const { trip, phone } = await journey(ids.operatorId, 1.5, "KRSTART1");
+    const url = `/api/v1/conductor/trips/${trip.id}`;
+    await phone.post(`${url}/location`).send(fix).expect(409);
+
+    const started = await phone.post(`${url}/start`).expect(200);
+    expect(started.body.startedAt).toBeTruthy();
+    expect((await phone.post(`${url}/start`).expect(200)).body.startedAt).toBe(started.body.startedAt);
+    await phone.post(`${url}/location`).send(fix).expect(201);
+
+    // The passenger sees a trip in progress; tickets can still be sold on it.
+    expect((await lookup({ pnr: "KRSTART1" }).expect(200)).body).toMatchObject({ trip: { status: "IN_PROGRESS" }, location: { latitude: 17.385 } });
+    expect((await prisma.trip.findUniqueOrThrow({ where: { id: trip.id } })).status).toBe("SCHEDULED");
+
+    const later = await journey(ids.operatorId, 30, "KRLATER2", "9222222222");
+    await later.phone.post(`/api/v1/conductor/trips/${later.trip.id}/start`).expect(409);
+    await phone.post(`/api/v1/conductor/trips/${later.trip.id}/start`).expect(404); // not this conductor's trip
+    await phone.post(`${url}/end`).expect(200);
+    await phone.post(`${url}/start`).expect(409);
+  });
+
+  it("shows the passenger's own stop with distance and time, and switches to the dropping point once on board", async () => {
+    const { trip, phone } = await journey(ids.operatorId, 0.5, "KRSTOP12");
+    // Stop positions are looked up once and kept; here they are already known.
+    await prisma.geoPlace.createMany({
+      data: [
+        { query: "ameerpet, hyderabad, india", latitude: 17.4375, longitude: 78.4483 },
+        { query: "majestic, bengaluru krstop12, india", latitude: 12.9767, longitude: 77.5713 },
+      ],
+    });
+    const link = (await lookup({ pnr: "KRSTOP12" }).expect(200)).body;
+    // Before the bus reports, the stop is known but not how far the bus is.
+    expect(link.stop).toMatchObject({ kind: "BOARDING", name: "Ameerpet", latitude: 17.4375, distanceKm: null, etaMinutes: null });
+
+    await phone.post(`/api/v1/conductor/trips/${trip.id}/location`).send(fix).expect(201);
+    const seen = (await location(link.token).expect(200)).body.stop;
+    // About 7 km in a straight line from the bus to Ameerpet, plus 30% for roads.
+    expect(seen.distanceKm).toBeGreaterThan(8);
+    expect(seen.distanceKm).toBeLessThan(11);
+    expect(seen.etaMinutes).toBeGreaterThan(10);
+    expect(seen.etaMinutes).toBeLessThan(30);
+
+    await prisma.passenger.create({
+      data: { operatorId: ids.operatorId, bookingId: (await prisma.booking.findFirstOrThrow({ where: { pnr: "KRSTOP12" } })).id, name: "Ramesh", phoneEnc: "x", phoneHash: "x", boarded: true },
+    });
+    expect((await location(link.token).expect(200)).body.stop).toMatchObject({ kind: "DROPPING", name: "Majestic" });
+
+    // A stop whose name is not on the map simply is not shown.
+    await prisma.geoPlace.deleteMany();
+    expect((await location(link.token).expect(200)).body.stop).toBeNull();
   });
 
   it("keeps each kind of token to its own job", async () => {

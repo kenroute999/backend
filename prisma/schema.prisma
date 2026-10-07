@@ -375,6 +375,9 @@ model Trip {
   /// Fare per kind of seat: { seater, singleBed, doubleBed }. `fare` is the lowest of them.
   fares       Json?
   status      TripStatus @default(SCHEDULED)
+  /// When the conductor pressed "Start trip". The status stays SCHEDULED so that
+  /// last-minute tickets can still be sold; passengers see the trip as in progress.
+  startedAt   DateTime?
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
@@ -390,6 +393,15 @@ model Trip {
   @@index([operatorId, departureAt])
   @@index([busId, departureAt])
   @@index([conductorId, departureAt])
+}
+
+/// Map position of a stop, found once by its name and kept. Null position = not found.
+model GeoPlace {
+  /// "stop, city, india" in lower case.
+  query     String   @id
+  latitude  Float?
+  longitude Float?
+  createdAt DateTime @default(now())
 }
 
 /// Where the bus was during a trip, as reported by the conductor's phone.
