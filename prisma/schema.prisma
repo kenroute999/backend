@@ -385,10 +385,32 @@ model Trip {
   driver    Driver?    @relation(fields: [driverId], references: [id])
   seats     TripSeat[]
   bookings  Booking[]
+  locations TripLocation[]
 
   @@index([operatorId, departureAt])
   @@index([busId, departureAt])
   @@index([conductorId, departureAt])
+}
+
+/// Where the bus was during a trip, as reported by the conductor's phone.
+/// ponytail: every position is kept; clear old trips' rows on a schedule once this grows.
+model TripLocation {
+  id         String   @id @default(uuid()) @db.Uuid
+  operatorId String   @db.Uuid
+  tripId     String   @db.Uuid
+  latitude   Float
+  longitude  Float
+  /// Metres.
+  accuracy   Float?
+  /// Metres per second.
+  speed      Float?
+  heading    Float?
+  recordedAt DateTime
+  createdAt  DateTime @default(now())
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@index([tripId, recordedAt])
 }
 
 /// A single seat on a specific trip, generated from the bus's SeatLayout.

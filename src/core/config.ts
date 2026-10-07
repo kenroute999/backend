@@ -21,6 +21,6 @@ export const config = {
   jwtAccessSecret: required("JWT_ACCESS_SECRET"),
   corsOrigins: (
     process.env.CORS_ORIGINS ??
-    [3001, 3002, 3003].flatMap((p) => [`http://127.0.0.1:${p}`, `http://localhost:${p}`]).join(",")
+    [3001, 3002, 3003, 3004].flatMap((p) => [`http://127.0.0.1:${p}`, `http://localhost:${p}`]).join(",")
   ).split(","),
 };

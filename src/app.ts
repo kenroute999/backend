@@ -16,6 +16,7 @@ import { reportsRouter } from "./modules/reports/routes";
 import { routesRouter } from "./modules/routes/routes";
 import { schedulesRouter } from "./modules/schedules/routes";
 import { supportRouter } from "./modules/support/routes";
+import { trackingRouter } from "./modules/tracking/routes";
 import { tripsRouter } from "./modules/trips/routes";
 
 export const app = express();
@@ -78,6 +79,9 @@ api.use("/support", requireAuth, requireRole("AGENT"), requireActive, supportRou
 
 // The conductor's phone app.
 api.use("/conductor", requireAuth, requireRole("CONDUCTOR"), requireActive, conductorAppRouter);
+
+// Passengers following their bus, and the phone's background GPS: no sign-in, own tokens.
+api.use("/tracking", trackingRouter);
 
 app.use("/api/v1", api);
 app.use(notFound);

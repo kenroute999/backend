@@ -4,6 +4,7 @@ import { idParam } from "../../core/accounts";
 import { decrypt } from "../../core/crypto";
 import { prisma } from "../../core/db";
 import { AppError } from "../../core/errors";
+import { gpsKeyFor, saveFix } from "../tracking/routes";
 
 // Everything here is the signed-in conductor's own work: only trips assigned to them.
 export const conductorAppRouter = Router();
@@ -108,6 +109,20 @@ conductorAppRouter.post("/sync", async (req, res) => {
     applied += count;
   }
   res.json({ received: events.length, applied });
+});
+
+// Where the bus is now, sent while the conductor has the app open.
+conductorAppRouter.post("/trips/:id/location", async (req, res) => {
+  const { id } = idParam.parse(req.params);
+  await ownTrip(id, req.auth.userId, req.operatorId);
+  res.status(201).json(await saveFix(id, req.auth.userId, req.body));
+});
+
+// A key for the phone's background GPS, which keeps reporting after the sign-in has timed out.
+conductorAppRouter.post("/trips/:id/gps-key", async (req, res) => {
+  const { id } = idParam.parse(req.params);
+  await ownTrip(id, req.auth.userId, req.operatorId);
+  res.json(gpsKeyFor(id, req.auth.userId));
 });
 
 conductorAppRouter.post("/trips/:id/end", async (req, res) => {
