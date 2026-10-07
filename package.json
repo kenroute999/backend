@@ -13,6 +13,7 @@
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "seed": "ts-node --transpile-only prisma/seed.ts",
     "new-operator": "ts-node --transpile-only prisma/new-operator.ts",
+    "demo:tracking": "ts-node --transpile-only prisma/demo-tracking.ts",
     "studio": "prisma studio"
   },
   "keywords": [],
