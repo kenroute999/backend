@@ -107,10 +107,15 @@ bookingRouter.get("/trips/:id/seats", async (req, res) => {
 });
 
 // The agent's own bookings, newest first. Agents never see another agent's bookings.
-// ponytail: latest 200 in one page; add paging and server-side filters when an agent outgrows that.
+// Without `since` this is the latest 200, for the list screens. With `since` (a day in
+// India) it is everything sold from that day on, for the dashboard and reports.
+// ponytail: capped at 5000 rows; add paging or server-side totals when an agent outgrows that.
 bookingRouter.get("/bookings", async (req, res) => {
+  const { since } = z.object({ since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD").optional() }).parse(req.query);
+  const from = since ? new Date(`${since}T00:00:00+05:30`) : undefined;
+  if (from && Number.isNaN(from.getTime())) throw new AppError(400, "VALIDATION_FAILED", "Invalid input", { since: "Not a real date" });
   const rows = await prisma.booking.findMany({
-    where: { operatorId: req.operatorId, agentId: req.auth.userId },
+    where: { operatorId: req.operatorId, agentId: req.auth.userId, ...(from && { createdAt: { gte: from } }) },
     select: {
       id: true,
       pnr: true,
@@ -134,7 +139,7 @@ bookingRouter.get("/bookings", async (req, res) => {
       commission: { select: { amount: true, status: true } },
     },
     orderBy: { createdAt: "desc" },
-    take: 200,
+    take: from ? 5000 : 200,
   });
 
   const items = rows.map(({ tripSeat, passenger, commission, ...b }) => ({

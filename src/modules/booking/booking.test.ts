@@ -212,6 +212,12 @@ describe("booking seats", () => {
     expect(JSON.stringify(mine.body)).not.toMatch(/phoneEnc|idProof/);
 
     expect((await as("AGENT", b.id, ids.operatorId).get("/api/v1/booking/bookings").expect(200)).body.total).toBe(0);
+
+    // `since` narrows by the day the ticket was sold.
+    const desk = as("AGENT", a.id, ids.operatorId);
+    expect((await desk.get("/api/v1/booking/bookings?since=2020-01-01").expect(200)).body.total).toBe(1);
+    expect((await desk.get("/api/v1/booking/bookings?since=2999-01-01").expect(200)).body.total).toBe(0);
+    await desk.get("/api/v1/booking/bookings?since=yesterday").expect(400);
   });
 
   it("cancels a ticket: seat back on sale, commission voided, and it can be sold again", async () => {
