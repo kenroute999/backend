@@ -90,6 +90,7 @@ bookingRouter.get("/trips/:id/seats", async (req, res) => {
       seatType: true,
       fare: true,
       status: true,
+      ladiesOnly: true,
       // Only the gender of the current occupant, for the seat colour. No names or phones.
       bookings: {
         where: { status: { in: ["CONFIRMED", "BOARDED", "COMPLETED"] } },
@@ -102,8 +103,12 @@ bookingRouter.get("/trips/:id/seats", async (req, res) => {
 
   const flat = seats.map(({ bookings, ...s }) => ({ ...s, passengerGender: bookings[0]?.passenger?.gender ?? null }));
   const held = heldForGender(flat.map((s) => ({ ...s, gender: s.passengerGender })), trip.bus.seating);
-  // `reservedFor`: a free seat beside a booked one is kept for a passenger of the same gender.
-  res.json({ trip, seats: flat.map((s) => ({ ...s, reservedFor: held.get(s.id) ?? null })) });
+  // `reservedFor`: a seat the owner keeps for women, or a free seat beside a booked one,
+  // which is kept for a passenger of the same gender.
+  res.json({
+    trip,
+    seats: flat.map((s) => ({ ...s, reservedFor: s.ladiesOnly ? ("FEMALE" as const) : (held.get(s.id) ?? null) })),
+  });
 });
 
 // The agent's own bookings, newest first. Agents never see another agent's bookings.

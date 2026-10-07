@@ -228,8 +228,21 @@ describe("schedules", () => {
       .expect(409);
     await owner().patch(`${url}/${free.id}`).send({ blocked: false }).expect(200);
 
+    // Ladies only: the owner marks a free seat; it shows as kept for women, a man is refused, a woman books it.
+    const lady = after.find((s: { status: string; id: string }) => s.status === "AVAILABLE" && s.id !== free.id);
+    await owner().patch(`${url}/${lady.id}`).send({ ladiesOnly: true }).expect(200);
+    await owner().patch(`${url}/${sold.id}`).send({ ladiesOnly: true }).expect(409);
+    await owner().patch(`${url}/${lady.id}`).send({ ladiesOnly: true, blocked: true }).expect(400);
+    const marked = (await owner().get(url).expect(200)).body.seats.find((s: { id: string }) => s.id === lady.id);
+    expect(marked).toMatchObject({ ladiesOnly: true, reservedFor: "FEMALE" });
+    const seatOrder = (gender: string) => ({ tripId: made.body.id, source: "AGENT", boardingPoint: "Ameerpet", droppingPoint: "Majestic", paymentMode: "CASH", passengers: [{ seatId: lady.id, name: "Asha Rao", age: 30, gender, phone: "9876543210", idProofType: "AADHAAR", idProofNumber: "123456789012" }] });
+    const refused = await desk.post("/api/v1/booking/bookings").send(seatOrder("MALE")).expect(409);
+    expect(refused.body.error).toMatchObject({ code: "SEAT_GENDER", message: expect.stringContaining("women only") });
+    await desk.post("/api/v1/booking/bookings").send(seatOrder("FEMALE")).expect(201);
+
     const other = await seedOwner("Other Travels", "owner@other.example.com");
     const them = as("OWNER", other.userId, other.operatorId);
+    await them.patch(`${url}/${free.id}`).send({ ladiesOnly: true }).expect(409);
     await them.get(url).expect(404);
     await them.patch(`${url}/${free.id}`).send({ blocked: true }).expect(409);
   });

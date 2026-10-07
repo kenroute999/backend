@@ -406,6 +406,8 @@ model TripSeat {
   status     SeatStatus @default(AVAILABLE)
   heldUntil  DateTime?
   heldById   String?    @db.Uuid
+  /// Set by the owner: only a woman may book this seat on this trip.
+  ladiesOnly Boolean    @default(false)
 
   operator Operator  @relation(fields: [operatorId], references: [id])
   trip     Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade)

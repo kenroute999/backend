@@ -141,6 +141,7 @@ export async function createBooking(ctx: { operatorId: string; agentId?: string 
         deck: true,
         row: true,
         col: true,
+        ladiesOnly: true,
         bookings: {
           where: { status: { in: ["CONFIRMED", "BOARDED", "COMPLETED"] } },
           select: { passenger: { select: { gender: true } } },
@@ -153,6 +154,10 @@ export async function createBooking(ctx: { operatorId: string; agentId?: string 
       .map((s) => ({ ...s, status: s.bookings[0] ? "BOOKED" : "TAKEN", gender: s.bookings[0]?.passenger?.gender }));
     for (const p of input.passengers) {
       const seat = placed.find((s) => s.id === p.seatId)!;
+      // The owner marked this seat for women, whoever sits beside it.
+      if (seat.ladiesOnly && p.gender !== "FEMALE") {
+        throw new AppError(409, "SEAT_GENDER", `Seat ${seat.seatNumber} is kept for women only`);
+      }
       const held = heldForGender([...others, { ...seat, status: "AVAILABLE" }], trip.bus.seating).get(seat.id);
       if (held && p.gender !== held) {
         const who = held === "FEMALE" ? "female" : "male";

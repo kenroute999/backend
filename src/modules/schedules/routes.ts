@@ -251,6 +251,7 @@ schedulesRouter.get("/:id/seats", async (req, res) => {
       seatType: true,
       fare: true,
       status: true,
+      ladiesOnly: true,
       // The ticket that holds the seat now, if any.
       bookings: {
         where: { status: { in: ["CONFIRMED", "BOARDED", "COMPLETED"] } },
@@ -273,14 +274,32 @@ schedulesRouter.get("/:id/seats", async (req, res) => {
     trip.bus.seating,
   );
   res.json({
-    seats: seats.map(({ bookings, ...s }) => ({ ...s, booking: bookings[0] ?? null, reservedFor: held.get(s.id) ?? null })),
+    seats: seats.map(({ bookings, ...s }) => ({
+      ...s,
+      booking: bookings[0] ?? null,
+      reservedFor: s.ladiesOnly ? ("FEMALE" as const) : (held.get(s.id) ?? null),
+    })),
   });
 });
 
-// The owner keeps a seat off sale (blocked) or puts it back. A sold seat is not touched here.
+// The owner keeps a seat off sale (blocked) or puts it back, or keeps a free seat for
+// women only. A sold seat is not touched here.
+const seatChange = z
+  .strictObject({ blocked: z.boolean().optional(), ladiesOnly: z.boolean().optional() })
+  .refine((v) => (v.blocked === undefined) !== (v.ladiesOnly === undefined), { message: "Send either blocked or ladiesOnly", path: ["blocked"] });
+
 schedulesRouter.patch("/:id/seats/:seatId", async (req, res) => {
   const { id, seatId } = z.object({ id: z.uuid(), seatId: z.uuid() }).parse(req.params);
-  const { blocked } = z.strictObject({ blocked: z.boolean() }).parse(req.body);
+  const { blocked, ladiesOnly } = seatChange.parse(req.body);
+  if (ladiesOnly !== undefined) {
+    const marked = await prisma.tripSeat.updateMany({
+      where: { id: seatId, tripId: id, operatorId: req.operatorId, status: "AVAILABLE" },
+      data: { ladiesOnly },
+    });
+    if (marked.count === 0) throw new AppError(409, "CONFLICT", "Only a free seat can be changed");
+    res.json({ id: seatId, ladiesOnly });
+    return;
+  }
   const changed = await prisma.tripSeat.updateMany({
     where: { id: seatId, tripId: id, operatorId: req.operatorId, status: blocked ? "AVAILABLE" : "BLOCKED" },
     data: { status: blocked ? "BLOCKED" : "AVAILABLE" },
