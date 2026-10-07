@@ -1,9 +1,13 @@
+import jwt from "jsonwebtoken";
 import request from "supertest";
 import { app } from "../app";
+import { signAccessToken } from "../core/auth";
+import { config } from "../core/config";
+import { decrypt } from "../core/crypto";
 import { prisma } from "../core/db";
 import { createTripWithSeats } from "../modules/trips/service";
 import { layoutFor } from "../modules/buses/layouts";
-import { as, cleanDb, seedOwner } from "./helpers";
+import { OWNER_EMAIL, OWNER_PASSWORD, as, cleanDb, seedOwner } from "./helpers";
 
 // What someone poking at the API with a proxy tool would try first.
 
@@ -217,5 +221,72 @@ describe("what the server gives away", () => {
     }
     // The agent's seat map shows no passenger names or phones of other people.
     expect(JSON.stringify(pages[7]!.body)).not.toMatch(/Ramesh|9876543210/);
+  });
+});
+
+describe("token attacks", () => {
+  const paths = ["/me", "/agents", "/bookings", "/reports/summary", "/schedules", "/booking/routes", "/booking/bookings", "/support/tickets", "/conductor/trips"];
+
+  it("refuses every altered token on every protected address, so faking a signed-in screen shows no data", async () => {
+    const a = await agent("anil@example.com", "AGT1");
+    const good = signAccessToken({ userId: a.id, operatorId: ids.operatorId, role: "AGENT" });
+    const [head, body, sig] = good.split(".") as [string, string, string];
+    const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+    const claims = { userId: ids.userId, operatorId: ids.operatorId, role: "OWNER" };
+
+    const forged = {
+      "role changed, old signature kept": `${head}.${b64({ ...JSON.parse(Buffer.from(body, "base64url").toString()), role: "OWNER" })}.${sig}`,
+      "signed with a guessed secret": jwt.sign(claims, "secret", { algorithm: "HS256" }),
+      "signed with an empty secret": `${b64({ alg: "HS256", typ: "JWT" })}.${b64(claims)}.${Buffer.from("").toString("base64url")}`,
+      "no signature (alg none)": `${b64({ alg: "none", typ: "JWT" })}.${b64(claims)}.`,
+      "expired": jwt.sign(claims, config.jwtAccessSecret, { algorithm: "HS256", expiresIn: -10 }),
+      "stronger-looking algorithm": jwt.sign(claims, config.jwtAccessSecret, { algorithm: "HS512" }),
+      "made-up role": jwt.sign({ ...claims, role: "SUPERADMIN" }, config.jwtAccessSecret, { algorithm: "HS256" }),
+      "account that does not exist": jwt.sign({ ...claims, userId: "11111111-1111-4111-8111-111111111111" }, config.jwtAccessSecret, { algorithm: "HS256" }),
+      "random text": "true",
+    };
+    for (const [what, token] of Object.entries(forged)) {
+      for (const path of paths) {
+        const res = await request(app).get(`/api/v1${path}`).set("Authorization", `Bearer ${token}`);
+        if (res.status !== 401 && res.status !== 403) throw new Error(`${what} was accepted on ${path} (${res.status})`);
+        expect(JSON.stringify(res.body)).not.toMatch(/Ramesh|9876543210|agentCode/);
+      }
+    }
+    // The untouched token still works, so the checks above are not just rejecting everything.
+    await request(app).get("/api/v1/booking/routes").set("Authorization", `Bearer ${good}`).expect(200);
+  });
+
+  it("a used or made-up refresh token gets nothing, and reusing one ends every session", async () => {
+    const login = await request(app).post("/api/v1/auth/login").send({ email: OWNER_EMAIL, password: OWNER_PASSWORD }).expect(200);
+    const first = login.body.refreshToken;
+    const next = await request(app).post("/api/v1/auth/refresh").send({ refreshToken: first }).expect(200);
+    await request(app).post("/api/v1/auth/refresh").send({ refreshToken: "made-up-token" }).expect(401);
+    await request(app).post("/api/v1/auth/refresh").send({ refreshToken: first }).expect(401); // replayed
+    await request(app).post("/api/v1/auth/refresh").send({ refreshToken: next.body.refreshToken }).expect(401); // all ended
+  });
+});
+
+describe("encryption of passenger details", () => {
+  it("stores phone and ID proof unreadable, differently each time, and refuses altered data", async () => {
+    const a = await agent("anil@example.com", "AGT1");
+    const t = await trip();
+    await as("AGENT", a.id, ids.operatorId)
+      .post("/api/v1/booking/bookings")
+      .send(order(t.id, [person(t.seats[0]!.id), person(t.seats[20]!.id)]))
+      .expect(201);
+
+    const [one, two] = await prisma.passenger.findMany();
+    for (const p of [one!, two!]) {
+      expect(`${p.phoneEnc}${p.idProofEnc}${p.phoneHash}`).not.toMatch(/9876543210|123456789012/);
+      expect(decrypt(p.phoneEnc)).toBe("9876543210");
+      expect(decrypt(p.idProofEnc!)).toBe("123456789012");
+    }
+    // Same phone, different stored text each time; the search hash is the same.
+    expect(one!.phoneEnc).not.toBe(two!.phoneEnc);
+    expect(one!.phoneHash).toBe(two!.phoneHash);
+    // Flip one character of the stored text: it must fail, not decrypt to something else.
+    const stored = one!.phoneEnc;
+    const flipped = stored.slice(0, -2) + (stored.endsWith("A") ? "B" : "A") + stored.slice(-1);
+    expect(() => decrypt(flipped)).toThrow();
   });
 });
