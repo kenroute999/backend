@@ -480,6 +480,13 @@ model Passenger {
   gender       Gender?
   idProofType  String?
   idProofEnc   String?
+  /// A copy of the journey as booked, so this table reads on its own.
+  /// The booking and its trip stay the source of truth.
+  seatNumber    String?
+  busNumber     String?
+  route         String?
+  boardingPoint String?
+  droppingPoint String?
   boarded      Boolean   @default(false)
   boardedAt    DateTime?
   boardedById  String?   @db.Uuid

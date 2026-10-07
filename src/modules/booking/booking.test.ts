@@ -196,6 +196,14 @@ describe("booking seats", () => {
     const b = await addAgent(ids.operatorId, "babu@example.com");
     const { trip, seats } = await tripIn(ids.operatorId, 30);
     await as("AGENT", a.id, ids.operatorId).post("/api/v1/booking/bookings").send(order(trip.id, [person(seats[0]!.id)])).expect(201);
+    // The passenger row itself says which seat, bus, route and stops were booked.
+    expect(await prisma.passenger.findFirstOrThrow()).toMatchObject({
+      seatNumber: seats[0]!.seatNumber,
+      busNumber: expect.stringMatching(/^TS 09 AB/),
+      route: expect.stringMatching(/^Hyderabad → /),
+      boardingPoint: "Ameerpet",
+      droppingPoint: "Majestic",
+    });
 
     const mine = await as("AGENT", a.id, ids.operatorId).get("/api/v1/booking/bookings").expect(200);
     expect(mine.body.total).toBe(1);

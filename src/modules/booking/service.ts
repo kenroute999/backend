@@ -170,12 +170,12 @@ export async function createBooking(ctx: { operatorId: string; agentId?: string 
       (await tx.channel.create({ data: { operatorId, type: "OWN_AGENT", status: "CONNECTED" } }));
 
     // Each seat has its own fare (sleeper and seater berths differ); the request never sets a price.
-    const fareBySeat = new Map(
-      (await tx.tripSeat.findMany({ where: { id: { in: seatIds } }, select: { id: true, fare: true } })).map((s) => [
-        s.id,
-        s.fare,
-      ]),
-    );
+    const bookedSeats = await tx.tripSeat.findMany({
+      where: { id: { in: seatIds } },
+      select: { id: true, fare: true, seatNumber: true },
+    });
+    const fareBySeat = new Map(bookedSeats.map((s) => [s.id, s.fare]));
+    const numberBySeat = new Map(bookedSeats.map((s) => [s.id, s.seatNumber]));
 
     const created = [];
     for (const p of input.passengers) {
@@ -206,6 +206,11 @@ export async function createBooking(ctx: { operatorId: string; agentId?: string 
               phoneHash: phoneHash(p.phone),
               idProofType: p.idProofType,
               idProofEnc: encrypt(p.idProofNumber),
+              seatNumber: numberBySeat.get(p.seatId) ?? null,
+              busNumber: trip.bus.registrationNo,
+              route: `${trip.route.origin} → ${trip.route.destination}`,
+              boardingPoint: input.boardingPoint,
+              droppingPoint: input.droppingPoint,
             },
           },
           ...(agent && commission && { commission: { create: { operatorId, agentId: agent.id, amount: commission } } }),
