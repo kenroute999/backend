@@ -4,7 +4,7 @@ import { idParam } from "../../core/accounts";
 import { prisma } from "../../core/db";
 import { AppError } from "../../core/errors";
 import { heldForGender } from "../booking/service";
-import { assertBusFree, createTripWithSeats, fareFor, faresSchema, type Fares } from "../trips/service";
+import { assertBusFree, assertBusInService, createTripWithSeats, fareFor, faresSchema, type Fares } from "../trips/service";
 
 // What the owner's Routes screen manages: a route, the bus running it, when, and at what fares.
 // Each row is one trip; its origin and destination are kept in the shared Route table,
@@ -159,8 +159,10 @@ schedulesRouter.patch("/:id", async (req, res) => {
   if (body.busId !== undefined || body.departureAt !== undefined || body.arrivalAt !== undefined) {
     await assertBusFree(operatorId, busId, departureAt, arrivalAt, id);
   }
-  if (busChanges && !(await prisma.bus.findFirst({ where: { id: busId, operatorId }, select: { id: true } }))) {
-    throw new AppError(400, "VALIDATION_FAILED", "Invalid input", { busId: "Bus not found" });
+  if (busChanges) {
+    const bus = await prisma.bus.findFirst({ where: { id: busId, operatorId }, select: { registrationNo: true, status: true } });
+    if (!bus) throw new AppError(400, "VALIDATION_FAILED", "Invalid input", { busId: "Bus not found" });
+    assertBusInService(bus);
   }
 
   const fares = body.fares ?? ((trip.fares ?? {}) as Fares);

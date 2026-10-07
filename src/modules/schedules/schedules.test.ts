@@ -102,6 +102,24 @@ describe("buses", () => {
     await owner().patch(`/api/v1/buses/${busId}`).send({ status: "MAINTENANCE" }).expect(409);
     await owner().delete(`/api/v1/buses/${busId}`).expect(409);
   });
+
+  it("a bus under maintenance or inactive cannot be given a trip, new or by switching", async () => {
+    const good = await mixedBus();
+    const trip = await owner().post("/api/v1/schedules").send(schedule(good)).expect(201);
+    const spare = await owner().post("/api/v1/buses").send({ ...bus, registrationNo: "TS 09 XX 0001" }).expect(201);
+
+    for (const status of ["MAINTENANCE", "INACTIVE"]) {
+      await owner().patch(`/api/v1/buses/${spare.body.id}`).send({ status }).expect(200);
+      const refused = await owner().post("/api/v1/schedules").send(schedule(spare.body.id, { departureAt: inHours(100), arrivalAt: inHours(109) })).expect(409);
+      expect(refused.body.error.message).toMatch(/TS 09 XX 0001 is (under maintenance|inactive)/);
+      await owner().patch(`/api/v1/schedules/${trip.body.id}`).send({ busId: spare.body.id }).expect(409);
+    }
+    expect(await prisma.trip.count()).toBe(1);
+
+    // Back in service: it can run again.
+    await owner().patch(`/api/v1/buses/${spare.body.id}`).send({ status: "ACTIVE" }).expect(200);
+    await owner().post("/api/v1/schedules").send(schedule(spare.body.id, { departureAt: inHours(100), arrivalAt: inHours(109) })).expect(201);
+  });
 });
 
 describe("schedules", () => {

@@ -40,6 +40,14 @@ export interface NewTrip {
   driverId?: string;
 }
 
+/** A bus the owner marked as under maintenance or inactive on the Buses page cannot be given a trip. */
+export function assertBusInService(bus: { registrationNo: string; status: string }) {
+  if (bus.status !== "ACTIVE") {
+    const why = bus.status === "MAINTENANCE" ? "under maintenance" : "inactive";
+    throw new AppError(409, "CONFLICT", `Bus ${bus.registrationNo} is ${why}. Set it to Active on the Buses page first.`);
+  }
+}
+
 /** One bus cannot be on two trips at once. */
 export async function assertBusFree(
   operatorId: string,
@@ -76,6 +84,7 @@ export async function createTripWithSeats(operatorId: string, input: NewTrip) {
   ]);
   if (!bus) throw new AppError(400, "VALIDATION_FAILED", "Invalid input", { busId: "Bus not found" });
   if (!route) throw new AppError(400, "VALIDATION_FAILED", "Invalid input", { routeId: "Route not found" });
+  assertBusInService(bus);
   await assertBusFree(operatorId, bus.id, input.departureAt, input.arrivalAt);
 
   const seats = layoutSeats.parse(bus.seatLayout.seats);
