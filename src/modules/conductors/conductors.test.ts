@@ -87,7 +87,14 @@ describe("conductors API", () => {
     const row = await prisma.conductor.findUniqueOrThrow({ where: { id: res.body.id } });
     expect(await bcrypt.compare(conductor.password, row.passwordHash)).toBe(true);
 
-    await owner().post("/api/v1/conductors").send({ ...conductor, name: "Twin" }).expect(409);
+    const twin = await owner().post("/api/v1/conductors").send({ ...conductor, name: "Twin" }).expect(409);
+    expect(twin.body.error.message).toBe("This mobile number is already used by your conductor Suresh Conductor");
+
+    // Another company trying the same number is refused without a word about who holds it.
+    const other = await seedOwner("Shiva Travels", "shiva@example.com");
+    const refused = await as("OWNER", other.userId, other.operatorId).post("/api/v1/conductors").send(conductor).expect(409);
+    expect(refused.body.error.message).toBe("This mobile number cannot be used. Enter a different number.");
+    expect(JSON.stringify(refused.body)).not.toMatch(/Suresh|another|already/i);
     await owner().post("/api/v1/conductors").send({ ...conductor, phone: "123" }).expect(400);
   });
 

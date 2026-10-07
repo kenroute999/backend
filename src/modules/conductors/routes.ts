@@ -46,7 +46,19 @@ function present<T extends { trips: unknown[] }>({ trips, ...conductor }: T) {
   return { ...conductor, trip: trips[0] ?? null };
 }
 
-const PHONE_TAKEN = "This mobile number is already used by another conductor";
+/**
+ * A mobile number is one conductor login across every company. The owner is told about
+ * their own conductor; a number held by another company gets a plain refusal, so nothing
+ * is said about someone else's staff.
+ */
+async function phoneTaken(operatorId: string, phone?: string) {
+  const own = phone && (await prisma.conductor.findFirst({ where: { operatorId, phone }, select: { name: true } }));
+  return new AppError(
+    409,
+    "CONFLICT",
+    own ? `This mobile number is already used by your conductor ${own.name}` : "This mobile number cannot be used. Enter a different number.",
+  );
+}
 
 export const conductorsRouter = Router();
 
@@ -80,7 +92,7 @@ conductorsRouter.post("/", async (req, res) => {
     });
     res.status(201).json(present(conductor));
   } catch (err) {
-    if (isPrismaError(err, "P2002")) throw new AppError(409, "CONFLICT", PHONE_TAKEN);
+    if (isPrismaError(err, "P2002")) throw await phoneTaken(req.operatorId, body.phone);
     throw err;
   }
 });
@@ -137,7 +149,7 @@ conductorsRouter.patch("/:id", async (req, res) => {
       }
     });
   } catch (err) {
-    if (isPrismaError(err, "P2002")) throw new AppError(409, "CONFLICT", PHONE_TAKEN);
+    if (isPrismaError(err, "P2002")) throw await phoneTaken(req.operatorId, body.phone);
     throw err;
   }
 
