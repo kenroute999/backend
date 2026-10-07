@@ -259,9 +259,22 @@ describe("booking seats", () => {
       deck: "LOWER",
       fare: "1200",
       agent: { id: a.id, name: "Anil Agent" },
-      passenger: { name: "Ramesh Kumar", phone: "9876543210", idProofType: "AADHAAR", boarded: false },
+      passenger: { name: "Ramesh Kumar", phone: "9876543210", idProofType: "AADHAAR", boarded: false, boardedAt: null, boardedBy: null },
       trip: { route: { origin: "Hyderabad" } },
     });
+
+    // Once the conductor boards a passenger, the owner sees when and by whom, and can filter on it.
+    const conductor = await prisma.conductor.create({
+      data: { operatorId: ids.operatorId, name: "Kiran", phone: "9000000001", passwordHash: "x" },
+    });
+    const at = new Date();
+    await prisma.passenger.update({ where: { bookingId: first.id }, data: { boarded: true, boardedAt: at, boardedById: conductor.id } });
+    const on = await owner.get("/api/v1/bookings?boarded=true").expect(200);
+    expect(on.body.total).toBe(1);
+    expect(on.body.items[0]).toMatchObject({ id: first.id, status: "CONFIRMED", passenger: { boarded: true, boardedAt: at.toISOString(), boardedBy: "Kiran" } });
+    expect((await owner.get("/api/v1/bookings?boarded=false").expect(200)).body.total).toBe(2);
+    await owner.get("/api/v1/bookings?boarded=maybe").expect(400);
+    await prisma.passenger.update({ where: { bookingId: first.id }, data: { boarded: false, boardedAt: null, boardedById: null } });
     expect(JSON.stringify(all.body)).not.toMatch(/phoneEnc|idProofEnc|1234 5678 9012/);
 
     await owner.post(`/api/v1/bookings/${first.id}/cancel`).expect(200);

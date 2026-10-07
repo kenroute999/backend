@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { z } from "zod";
 import { idParam } from "../../core/accounts";
 import { decrypt } from "../../core/crypto";
 import { prisma } from "../../core/db";
@@ -10,8 +11,10 @@ export const ownerBookingsRouter = Router();
 // ponytail: latest 500 in one page, filtered in the browser; add paging and server-side
 // filters when an operator's bookings outgrow that.
 ownerBookingsRouter.get("/", async (req, res) => {
+  // `boarded=true|false` narrows to passengers the conductor has, or has not, boarded.
+  const { boarded } = z.object({ boarded: z.enum(["true", "false"]).optional() }).parse(req.query);
   const rows = await prisma.booking.findMany({
-    where: { operatorId: req.operatorId },
+    where: { operatorId: req.operatorId, ...(boarded && { passenger: { boarded: boarded === "true" } }) },
     select: {
       id: true,
       pnr: true,
@@ -33,7 +36,18 @@ ownerBookingsRouter.get("/", async (req, res) => {
           bus: { select: { registrationNo: true, name: true } },
         },
       },
-      passenger: { select: { name: true, age: true, gender: true, phoneEnc: true, idProofType: true, boarded: true } },
+      passenger: {
+        select: {
+          name: true,
+          age: true,
+          gender: true,
+          phoneEnc: true,
+          idProofType: true,
+          boarded: true,
+          boardedAt: true,
+          boardedBy: { select: { name: true } },
+        },
+      },
     },
     orderBy: { createdAt: "desc" },
     take: 500,
@@ -51,7 +65,10 @@ ownerBookingsRouter.get("/", async (req, res) => {
       gender: passenger.gender,
       phone: decrypt(passenger.phoneEnc),
       idProofType: passenger.idProofType,
+      // Boarding is recorded by the conductor's app; it is separate from the booking's status.
       boarded: passenger.boarded,
+      boardedAt: passenger.boardedAt,
+      boardedBy: passenger.boardedBy?.name ?? null,
     },
   }));
   res.json({ items, total: items.length });
