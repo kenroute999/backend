@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { idParam } from "../../core/accounts";
 import { prisma } from "../../core/db";
 import { AppError } from "../../core/errors";
 import { sendMail, supportEmail } from "../../core/mail";
@@ -20,7 +21,7 @@ const ticketInput = z.strictObject({
     .toUpperCase()
     .regex(/^[A-Z0-9-]{4,20}$/, "Enter a valid PNR")
     .optional(),
-  description: z.string().trim().min(5).max(2000),
+  description: z.string().trim().min(1).max(2000),
 });
 
 /** "SUP" plus the first six characters of the id: short enough to read out on a call. */
@@ -35,6 +36,18 @@ supportRouter.get("/tickets", async (req, res) => {
   });
   const items = rows.map((t) => ({ ...t, ticketNo: ticketNo(t.id) }));
   res.json({ items, total: items.length });
+});
+
+// The agent closes their own ticket once it is sorted out, or opens it again.
+supportRouter.patch("/tickets/:id", async (req, res) => {
+  const { id } = idParam.parse(req.params);
+  const { status } = z.strictObject({ status: z.enum(["OPEN", "RESOLVED"]) }).parse(req.body);
+  const changed = await prisma.supportTicket.updateMany({
+    where: { id, operatorId: req.operatorId, agentId: req.auth.userId },
+    data: { status },
+  });
+  if (changed.count === 0) throw new AppError(404, "NOT_FOUND", "Ticket not found");
+  res.json({ id, status });
 });
 
 supportRouter.post("/tickets", async (req, res) => {

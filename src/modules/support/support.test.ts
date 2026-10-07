@@ -37,6 +37,14 @@ describe("support tickets", () => {
 
     expect((await desk.get("/api/v1/support/tickets").expect(200)).body.items).toHaveLength(1);
     expect((await as("AGENT", b.id, ids.operatorId).get("/api/v1/support/tickets").expect(200)).body.total).toBe(0);
+
+    // Its agent marks it resolved and can reopen it; another agent cannot touch it.
+    const url = `/api/v1/support/tickets/${made.body.id}`;
+    await as("AGENT", b.id, ids.operatorId).patch(url).send({ status: "RESOLVED" }).expect(404);
+    await desk.patch(url).send({ status: "PENDING" }).expect(400);
+    await desk.patch(url).send({ status: "RESOLVED" }).expect(200);
+    expect((await desk.get("/api/v1/support/tickets").expect(200)).body.items[0].status).toBe("RESOLVED");
+    await desk.patch(url).send({ status: "OPEN" }).expect(200);
   });
 
   it("rejects a bad ticket and anyone who is not an agent", async () => {
