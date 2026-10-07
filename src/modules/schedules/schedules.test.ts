@@ -55,6 +55,14 @@ describe("seat layouts", () => {
     expect(sleeper.filter((s) => s.type === "DOUBLE_SLEEPER")).toHaveLength(24);
     expect(new Set(sleeper.map((s) => s.number)).size).toBe(36);
 
+    // The 37-seat sleeper: the same bus plus L19, one single bed in the aisle behind the last row.
+    const withBack = designedSeats("SLEEPER_37");
+    expect(withBack).toHaveLength(37);
+    expect(withBack.filter((s) => s.col === 1)).toEqual([
+      { number: "L19", deck: "LOWER", row: 6, col: 1, type: "SLEEPER", ladiesOnly: false },
+    ]);
+    expect(withBack.filter((s) => s.deck === "UPPER").map((s) => s.number)).toContain("U37");
+
     const seater = designedSeats("SEATER");
     expect(seater).toHaveLength(45);
     expect(seater.every((s) => s.deck === "LOWER" && s.type === "SEATER")).toBe(true);
@@ -78,6 +86,24 @@ describe("seat layouts", () => {
       ["DOUBLE_SLEEPER", "950", 24],
       ["SLEEPER", "1400", 12],
     ]);
+  });
+
+  it("a sleeper added with 37 seats gets the back bed L19 as a real seat, and keeps it on later edits", async () => {
+    const made = await owner().post("/api/v1/buses").send({ ...bus, seating: "SLEEPER", seats: 37 }).expect(201);
+    expect(made.body).toMatchObject({ seating: "SLEEPER", seats: 37 });
+    const url = `/api/v1/buses/${made.body.id}`;
+    expect((await owner().patch(url).send({ name: "Renamed" }).expect(200)).body.seats).toBe(37);
+
+    const trip = await owner().post("/api/v1/schedules").send(schedule(made.body.id, { fares: { singleBed: 1400, doubleBed: 950 } })).expect(201);
+    const back = await prisma.tripSeat.findFirstOrThrow({ where: { tripId: trip.body.id, seatNumber: "L19" } });
+    expect(back).toMatchObject({ deck: "LOWER", col: 1, seatType: "SLEEPER", status: "AVAILABLE" });
+    expect(back.fare.toFixed(0)).toBe("1400");
+    expect(await prisma.tripSeat.count({ where: { tripId: trip.body.id } })).toBe(37);
+
+    // Seats are on sale, so the layout cannot change under them; another kind of bus ignores 37.
+    await owner().patch(url).send({ seats: 36 }).expect(409);
+    const seater = await owner().post("/api/v1/buses").send({ ...bus, registrationNo: "TS 09 ZZ 0001", seating: "SEATER", seats: 37 }).expect(201);
+    expect(seater.body.seats).toBe(45);
   });
 });
 

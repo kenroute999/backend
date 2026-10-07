@@ -7,12 +7,16 @@ import { prisma } from "../../core/db";
 // `row` counts from the front of the bus.
 
 export type Seating = "SLEEPER" | "SEATER" | "SEATER_SLEEPER";
+/** A sleeper comes with or without one extra bed across the back of the lower deck. */
+type PlanKey = Seating | "SLEEPER_37";
 type Kind = "sleeper" | "seater";
 type Side = { rows: number; kind: Kind } | null;
 interface DeckPlan {
   single: Side;
   pair: Side;
   backBench: boolean;
+  /** One single bed in the aisle position behind the last row. */
+  backBerth?: boolean;
 }
 interface Plan {
   name: string;
@@ -21,12 +25,19 @@ interface Plan {
   upper: DeckPlan | null;
 }
 
-const PLANS: Record<Seating, Plan> = {
+const PLANS: Record<PlanKey, Plan> = {
   // 6 single beds and 6 double beds on each deck.
   SLEEPER: {
     name: "Sleeper (2+1)",
     arrangement: "2-1",
     lower: { single: { rows: 6, kind: "sleeper" }, pair: { rows: 6, kind: "sleeper" }, backBench: false },
+    upper: { single: { rows: 6, kind: "sleeper" }, pair: { rows: 6, kind: "sleeper" }, backBench: false },
+  },
+  // The same bus with a 37th bed (L19) across the back of the lower deck.
+  SLEEPER_37: {
+    name: "Sleeper (2+1) 37",
+    arrangement: "2-1",
+    lower: { single: { rows: 6, kind: "sleeper" }, pair: { rows: 6, kind: "sleeper" }, backBench: false, backBerth: true },
     upper: { single: { rows: 6, kind: "sleeper" }, pair: { rows: 6, kind: "sleeper" }, backBench: false },
   },
   // 10 rows of four and a five-seat back bench, one deck.
@@ -56,8 +67,12 @@ export interface LayoutSeat {
   ladiesOnly: boolean;
 }
 
-export function designedSeats(seating: Seating): LayoutSeat[] {
-  const plan = PLANS[seating];
+/** Which plan a bus gets: a sleeper asked for with 37 seats has the back bed, every other bus the standard plan. */
+export const planKey = (seating: Seating, seats?: number): PlanKey =>
+  seating === "SLEEPER" && seats === 37 ? "SLEEPER_37" : seating;
+
+export function designedSeats(key: PlanKey): LayoutSeat[] {
+  const plan = PLANS[key];
   const singleCols = plan.arrangement === "2-1" ? [0] : [0, 1];
   const pairCols = plan.arrangement === "2-1" ? [2, 3] : [3, 4];
   const seats: LayoutSeat[] = [];
@@ -77,6 +92,7 @@ export function designedSeats(seating: Seating): LayoutSeat[] {
       const benchCols = plan.arrangement === "2-1" ? [2, 3, 1, 0] : [0, 1, 2, 3, 4];
       for (const c of benchCols) add(benchRow, c, d.pair?.kind ?? "seater", false);
     }
+    if (d.backBerth) add(Math.max(d.single?.rows ?? 0, d.pair?.rows ?? 0), 1, "sleeper", false);
   };
 
   build("LOWER", plan.lower);
@@ -85,11 +101,12 @@ export function designedSeats(seating: Seating): LayoutSeat[] {
 }
 
 /** The operator's layout for a kind of bus, created on first use. Buses of one kind share it. */
-export async function layoutFor(operatorId: string, seating: Seating) {
-  const name = PLANS[seating].name;
+export async function layoutFor(operatorId: string, seating: Seating, seatCount?: number) {
+  const key = planKey(seating, seatCount);
+  const name = PLANS[key].name;
   const existing = await prisma.seatLayout.findFirst({ where: { operatorId, name } });
   if (existing) return existing;
-  const seats = designedSeats(seating);
+  const seats = designedSeats(key);
   return prisma.seatLayout.create({
     data: { operatorId, name, totalSeats: seats.length, seats: seats as unknown as object[] },
   });

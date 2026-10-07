@@ -14,7 +14,7 @@ const busInput = z.strictObject({
   name: z.string().trim().min(1).max(60),
   seating: z.enum(["SLEEPER", "SEATER", "SEATER_SLEEPER"]),
   isAc: z.boolean(),
-  /** Accepted for older clients but not stored: the seat count follows from the layout of the bus. */
+  /** Not stored: the seat count follows from the layout. Only 37 on a sleeper matters; it picks the plan with the back bed. */
   seats: z.number().int().min(1).max(80).optional(),
   status: z.enum(["ACTIVE", "MAINTENANCE", "INACTIVE"]).default("ACTIVE"),
 });
@@ -54,9 +54,9 @@ busesRouter.get("/", async (req, res) => {
 });
 
 busesRouter.post("/", async (req, res) => {
-  const { seats: _seats, ...body } = busInput.parse(req.body);
+  const { seats, ...body } = busInput.parse(req.body);
   const operatorId = req.operatorId;
-  const layout = await layoutFor(operatorId, body.seating);
+  const layout = await layoutFor(operatorId, body.seating, seats);
   try {
     const bus = await prisma.bus.create({ data: { ...body, operatorId, seatLayoutId: layout.id }, select: busFields });
     res.status(201).json(present(bus));
@@ -68,14 +68,19 @@ busesRouter.post("/", async (req, res) => {
 
 busesRouter.patch("/:id", async (req, res) => {
   const { id } = idParam.parse(req.params);
-  const { seats: _seats, ...body } = busInput.partial().parse(req.body);
+  const { seats, ...body } = busInput.partial().parse(req.body);
   const operatorId = req.operatorId;
 
   const existing = await prisma.bus.findFirst({ where: { id, operatorId }, select: busFields });
   if (!existing) throw new AppError(404, "NOT_FOUND", "Bus not found");
 
   const seating = body.seating ?? existing.seating;
-  const layoutChanges = seating !== existing.seating;
+  // A request that names neither the kind nor the seat count leaves the layout alone.
+  const layout =
+    body.seating === undefined && seats === undefined
+      ? existing.seatLayout
+      : await layoutFor(operatorId, seating, seats ?? existing.seatLayout.totalSeats);
+  const layoutChanges = layout.id !== existing.seatLayout.id;
   const goesOffRoad = body.status !== undefined && body.status !== "ACTIVE" && existing.status === "ACTIVE";
   // Seats already on sale were generated from the old layout, and passengers may hold them.
   if ((layoutChanges || goesOffRoad) && (await hasUpcomingTrips(id))) {
@@ -90,7 +95,7 @@ busesRouter.patch("/:id", async (req, res) => {
         ...(body.name !== undefined && { name: body.name }),
         ...(body.isAc !== undefined && { isAc: body.isAc }),
         ...(body.status !== undefined && { status: body.status }),
-        ...(layoutChanges && { seating, seatLayoutId: (await layoutFor(operatorId, seating)).id }),
+        ...(layoutChanges && { seating, seatLayoutId: layout.id }),
       },
       select: busFields,
     });
