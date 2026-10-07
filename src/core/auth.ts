@@ -3,6 +3,7 @@ import type { RequestHandler } from "express";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { config } from "./config";
+import { prisma } from "./db";
 import { AppError } from "./errors";
 
 /** Which table the account lives in: User (owners), Agent or Conductor. */
@@ -64,6 +65,23 @@ export const requireAuth: RequestHandler = (req, _res, next) => {
 
   req.auth = parsed.data;
   req.operatorId = parsed.data.operatorId;
+  next();
+};
+
+/**
+ * A token stays valid for 15 minutes after it is issued. This closes that gap: an
+ * account the owner has disabled or deleted is refused on its very next request.
+ * Runs after requireRole, so a wrong-role token still gets 403.
+ */
+export const requireActive: RequestHandler = async (req, _res, next) => {
+  const where = { id: req.auth.userId, operatorId: req.auth.operatorId, isActive: true };
+  const found =
+    req.auth.role === "OWNER"
+      ? await prisma.user.count({ where })
+      : req.auth.role === "AGENT"
+        ? await prisma.agent.count({ where })
+        : await prisma.conductor.count({ where });
+  if (found === 0) throw unauthenticated();
   next();
 };
 

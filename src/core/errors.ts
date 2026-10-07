@@ -31,6 +31,14 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
     res.status(400).json({ error: { code: "VALIDATION_FAILED", message: "Malformed JSON", details: {} } });
     return;
   }
+  // Other request-level failures raised by Express itself (body too large, bad encoding...).
+  if (typeof err?.status === "number" && err.status >= 400 && err.status < 500) {
+    const tooLarge = err.status === 413;
+    res.status(err.status).json({
+      error: { code: tooLarge ? "TOO_LARGE" : "BAD_REQUEST", message: tooLarge ? "Request is too large" : "Bad request", details: {} },
+    });
+    return;
+  }
   console.error(err);
   res.status(500).json({ error: { code: "INTERNAL", message: "Something went wrong", details: {} } });
 };
