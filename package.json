@@ -27,6 +27,7 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.6.0",
     "jsonwebtoken": "^9.0.3",
+    "nodemailer": "^10.0.15",
     "pg": "^8.23.1",
     "socket.io": "^4.8.3",
     "zod": "^4.4.3"
@@ -38,6 +39,7 @@
     "@types/jest": "^30.0.0",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.1.1",
+    "@types/nodemailer": "^8.0.2",
     "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.1",
     "eslint": "^10.7.0",

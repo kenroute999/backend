@@ -14,6 +14,7 @@ import { driversRouter } from "./modules/drivers/routes";
 import { reportsRouter } from "./modules/reports/routes";
 import { routesRouter } from "./modules/routes/routes";
 import { schedulesRouter } from "./modules/schedules/routes";
+import { supportRouter } from "./modules/support/routes";
 import { tripsRouter } from "./modules/trips/routes";
 
 export const app = express();
@@ -42,6 +43,7 @@ api.use("/reports", owner, reportsRouter);
 
 // The agent's booking desk.
 api.use("/booking", requireAuth, requireRole("AGENT"), bookingRouter);
+api.use("/support", requireAuth, requireRole("AGENT"), supportRouter);
 
 // The conductor's phone app.
 api.use("/conductor", requireAuth, requireRole("CONDUCTOR"), conductorAppRouter);
