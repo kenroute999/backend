@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { idParam } from "../../core/accounts";
+import { decrypt } from "../../core/crypto";
 import { prisma } from "../../core/db";
 import { AppError } from "../../core/errors";
 
@@ -43,7 +44,17 @@ conductorAppRouter.get("/trips", async (req, res) => {
   res.json({ items, total: items.length });
 });
 
-// Name, seat and ticket code only: conductors do not see fares or phone numbers.
+/** A phone number that cannot be read must not break the whole boarding list. */
+function phoneOf(phoneEnc: string): string {
+  try {
+    return decrypt(phoneEnc);
+  } catch {
+    return "";
+  }
+}
+
+// Name, seat, ticket code and phone (to call a passenger who has not turned up), and only
+// for the conductor's own trips. Conductors never see fares or ID proofs.
 conductorAppRouter.get("/trips/:id/passengers", async (req, res) => {
   const { id } = idParam.parse(req.params);
   await ownTrip(id, req.auth.userId, req.operatorId);
@@ -53,13 +64,13 @@ conductorAppRouter.get("/trips/:id/passengers", async (req, res) => {
     select: {
       pnr: true,
       tripSeat: { select: { seatNumber: true } },
-      passenger: { select: { id: true, name: true, boarded: true } },
+      passenger: { select: { id: true, name: true, boarded: true, phoneEnc: true } },
     },
     orderBy: { tripSeat: { seatNumber: "asc" } },
   });
   const items = bookings.flatMap((b) =>
     b.passenger
-      ? [{ id: b.passenger.id, tripId: id, name: b.passenger.name, seat: b.tripSeat.seatNumber, pnr: b.pnr, boarded: b.passenger.boarded }]
+      ? [{ id: b.passenger.id, tripId: id, name: b.passenger.name, seat: b.tripSeat.seatNumber, pnr: b.pnr, phone: phoneOf(b.passenger.phoneEnc), boarded: b.passenger.boarded }]
       : [],
   );
   res.json({ items, total: items.length });

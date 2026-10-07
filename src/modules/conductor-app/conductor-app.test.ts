@@ -1,3 +1,4 @@
+import { encrypt } from "../../core/crypto";
 import { prisma } from "../../core/db";
 import { as, cleanDb, seedOwner } from "../../test/helpers";
 import { createTripWithSeats } from "../trips/service";
@@ -56,7 +57,7 @@ describe("conductor app", () => {
     await as("AGENT", ids.userId, ids.operatorId).get("/api/v1/conductor/trips").expect(403);
   });
 
-  it("shows passengers without phone or fare, records boarding, and ignores another conductor's passengers", async () => {
+  it("shows passengers with their phone but no fare or ID proof, records boarding, and ignores another conductor's passengers", async () => {
     const mine = await conductor(ids.operatorId, "9111111111");
     const other = await conductor(ids.operatorId, "9222222222");
     const trip = await tripFor(ids.operatorId, mine.id, 5);
@@ -66,14 +67,15 @@ describe("conductor app", () => {
       data: { operatorId: ids.operatorId, tripId: trip.id, tripSeatId: seat.id, channelId: channel.id, source: "COUNTER", pnr: "KR7H2M9Q", fare: 1200 },
     });
     const passenger = await prisma.passenger.create({
-      data: { operatorId: ids.operatorId, bookingId: booking.id, name: "Ramesh Kumar", phoneEnc: "enc", phoneHash: "hash" },
+      data: { operatorId: ids.operatorId, bookingId: booking.id, name: "Ramesh Kumar", phoneEnc: encrypt("9876543210"), phoneHash: "hash", idProofEnc: encrypt("123456789012") },
     });
 
     const me = as("CONDUCTOR", mine.id, ids.operatorId);
     const list = await me.get(`/api/v1/conductor/trips/${trip.id}/passengers`).expect(200);
     expect(list.body.items).toEqual([
-      { id: passenger.id, tripId: trip.id, name: "Ramesh Kumar", seat: "L1", pnr: "KR7H2M9Q", boarded: false },
+      { id: passenger.id, tripId: trip.id, name: "Ramesh Kumar", seat: "L1", pnr: "KR7H2M9Q", phone: "9876543210", boarded: false },
     ]);
+    expect(JSON.stringify(list.body)).not.toMatch(/1200|fare|123456789012|idProof/);
 
     const event = { tripId: trip.id, passengerId: passenger.id, boarded: true, at: new Date().toISOString() };
     const them = as("CONDUCTOR", other.id, ids.operatorId);
