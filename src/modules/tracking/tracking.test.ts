@@ -1,5 +1,6 @@
 import request from "supertest";
 import { app } from "../../app";
+import { encrypt, phoneHash } from "../../core/crypto";
 import { prisma } from "../../core/db";
 import { as, cleanDb, seedOwner } from "../../test/helpers";
 import { createTripWithSeats } from "../trips/service";
@@ -69,10 +70,25 @@ describe("live bus tracking", () => {
     await phone.post(`/api/v1/conductor/trips/${trip.id}/location`).send(fix).expect(409);
   });
 
+  it("opens the same trip for the mobile number the ticket was booked with", async () => {
+    await journey(ids.operatorId, 0.5, "KRPASS01");
+    const booking = await prisma.booking.findFirstOrThrow({ where: { pnr: "KRPASS01" } });
+    await prisma.passenger.create({
+      data: { operatorId: ids.operatorId, bookingId: booking.id, name: "Ramesh", phoneEnc: encrypt("9876543210"), phoneHash: phoneHash("9876543210") },
+    });
+
+    const found = await lookup({ mobile: "9876543210" }).expect(200);
+    expect(found.body).toMatchObject({ trip: { origin: "Hyderabad", status: "SCHEDULED" } });
+    // A mobile with no booking, and a malformed one, are refused.
+    await lookup({ mobile: "9000000000" }).expect(404);
+    await lookup({ mobile: "98765" }).expect(400);
+  });
+
   it("refuses unknown PNRs, mobile numbers, bad positions and positions outside the journey", async () => {
     const { trip, phone } = await journey(ids.operatorId, 30, "KRLATER1");
     await lookup({ pnr: "KRXXXX99" }).expect(404);
-    await lookup({ mobile: "9876543210" }).expect(400);
+    await lookup({ mobile: "9876543210" }).expect(404);
+    await lookup({ mobile: "12345" }).expect(400);
     await lookup({ pnr: "' OR 1=1 --" }).expect(400);
 
     // A trip leaving tomorrow: the conductor's whereabouts today are nobody's business.

@@ -2,7 +2,9 @@ import { Router, type Request } from "express";
 import { rateLimit } from "express-rate-limit";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
+import { mobile as mobileInput } from "../../core/accounts";
 import { config } from "../../core/config";
+import { phoneHash } from "../../core/crypto";
 import { prisma } from "../../core/db";
 import { AppError } from "../../core/errors";
 import { distanceKm, findPlace } from "./places";
@@ -186,24 +188,31 @@ const limitLookups = rateLimit({
   handler: (_req, _res, next) => next(new AppError(429, "RATE_LIMITED", "Too many tries. Wait a minute and try again.")),
 });
 
-// Only the PNR opens a trip. A mobile number is known to too many people to be a key
-// to where someone is travelling.
-const lookupInput = z.strictObject({
-  pnr: z
-    .string()
-    .trim()
-    .toUpperCase()
-    .regex(/^[A-Z0-9]{6,12}$/, "Enter the PNR printed on your ticket"),
-});
+// A ticket can be opened by the PNR printed on it, or by the mobile number it was
+// booked with. Both are matched against the booking; the mobile lookup hashes the
+// number and matches it against the passenger's phoneHash, so nothing is decrypted.
+const lookupInput = z.union([
+  z.strictObject({
+    pnr: z
+      .string()
+      .trim()
+      .toUpperCase()
+      .regex(/^[A-Z0-9]{6,12}$/, "Enter the PNR printed on your ticket"),
+  }),
+  z.strictObject({ mobile: mobileInput }),
+]);
 
 trackingRouter.post("/lookup", limitLookups, async (req, res) => {
-  const { pnr } = lookupInput.parse(req.body);
+  const input = lookupInput.parse(req.body);
   const booking = await prisma.booking.findFirst({
-    where: { pnr, status: { in: ["CONFIRMED", "BOARDED", "COMPLETED"] } },
+    where: {
+      status: { in: ["CONFIRMED", "BOARDED", "COMPLETED"] },
+      ...("pnr" in input ? { pnr: input.pnr } : { passenger: { phoneHash: phoneHash(input.mobile) } }),
+    },
     orderBy: { createdAt: "desc" },
     select: { id: true, trip: { select: tripFields } },
   });
-  if (!booking) throw new AppError(404, "NOT_FOUND", "No ticket found for this PNR");
+  if (!booking) throw new AppError(404, "NOT_FOUND", "No ticket found for this PNR or mobile number");
   res.json({
     token: sign({ kind: "track", tripId: booking.trip.id, bookingId: booking.id }, LINK_TTL_S),
     expiresInSeconds: LINK_TTL_S,
